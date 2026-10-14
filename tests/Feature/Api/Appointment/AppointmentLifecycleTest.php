@@ -2,156 +2,113 @@
 
 use App\Models\Appointment;
 use App\Models\Customer;
-use App\Models\Dealership;
-use App\Models\ServiceBay;
-use App\Models\ServiceType;
-use App\Models\Technician;
 use App\Models\Vehicle;
 use Carbon\CarbonImmutable;
-use Laravel\Sanctum\Sanctum;
 
-function phase6Fixture(): array
+/**
+ * An appointment that belongs to a different customer (and that customer's vehicle).
+ */
+function otherCustomersAppointment(object $booking): Appointment
 {
-    $customer = Customer::factory()->create();
-    $vehicle = Vehicle::factory()->for($customer)->create();
-    $secondVehicle = Vehicle::factory()->for($customer)->create();
-    $dealership = Dealership::factory()->create();
-    $technician = Technician::factory()->for($dealership)->create(['active' => true]);
-    $serviceBay = ServiceBay::factory()->for($dealership)->create(['active' => true]);
-    $serviceType = ServiceType::factory()->create(['duration' => 60, 'active' => true]);
-
-    Sanctum::actingAs($customer);
-
-    return compact('customer', 'vehicle', 'secondVehicle', 'dealership', 'technician', 'serviceBay', 'serviceType');
-}
-
-function phase6AppointmentPayload(array $fixture, string $startAt = '2030-11-01T10:00:00+07:00'): array
-{
-    return [
-        'vehicle_id' => $fixture['vehicle']->id,
-        'dealership_id' => $fixture['dealership']->id,
-        'service_type_id' => $fixture['serviceType']->id,
-        'start_at' => $startAt,
-    ];
-}
-
-function phase6CreateAppointment(array $fixture, array $overrides = []): Appointment
-{
-    return Appointment::factory()->create(array_merge([
-        'customer_id' => $fixture['customer']->id,
-        'vehicle_id' => $fixture['vehicle']->id,
-        'dealership_id' => $fixture['dealership']->id,
-        'service_type_id' => $fixture['serviceType']->id,
-        'technician_id' => $fixture['technician']->id,
-        'service_bay_id' => $fixture['serviceBay']->id,
-        'start_at' => CarbonImmutable::parse('2030-11-01T10:00:00+07:00')->utc(),
-        'end_at' => CarbonImmutable::parse('2030-11-01T11:00:00+07:00')->utc(),
-        'status' => 'confirmed',
-    ], $overrides));
-}
-
-test('idempotent retry returns the same AppointmentResource representation', function () {
-    $fixture = phase6Fixture();
-    $payload = phase6AppointmentPayload($fixture);
-
-    $first = $this->withHeader('Idempotency-Key', 'phase6-resource-replay')
-        ->postJson('/api/v1/appointments', $payload)
-        ->assertCreated();
-
-    $second = $this->withHeader('Idempotency-Key', 'phase6-resource-replay')
-        ->postJson('/api/v1/appointments', $payload)
-        ->assertOk();
-
-    $second->assertExactJson($first->json())
-        ->assertJsonMissingPath('data.customer_id')
-        ->assertJsonMissingPath('data.vehicle_id')
-        ->assertJsonPath('data.vehicle.id', $fixture['vehicle']->id)
-        ->assertJsonPath('data.dealership.id', $fixture['dealership']->id)
-        ->assertJsonPath('data.service_type.id', $fixture['serviceType']->id)
-        ->assertJsonPath('data.technician.id', $fixture['technician']->id)
-        ->assertJsonPath('data.service_bay.id', $fixture['serviceBay']->id);
-});
-
-test('appointment list is scoped to the authenticated customer', function () {
-    $fixture = phase6Fixture();
-    $owned = phase6CreateAppointment($fixture);
     $otherCustomer = Customer::factory()->create();
-    $otherVehicle = Vehicle::factory()->for($otherCustomer)->create();
-    $other = phase6CreateAppointment($fixture, [
+
+    return existingAppointment($booking, [
         'customer_id' => $otherCustomer->id,
-        'vehicle_id' => $otherVehicle->id,
+        'vehicle_id' => Vehicle::factory()->for($otherCustomer)->create()->id,
     ]);
+}
 
-    $response = $this->getJson('/api/v1/appointments')->assertOk();
+/*
+|--------------------------------------------------------------------------
+| List
+|--------------------------------------------------------------------------
+*/
 
-    $response->assertJsonPath('data.0.id', $owned->id)
+it('scopes the list to the authenticated customer', function (object $booking) {
+    $owned = existingAppointment($booking);
+    $other = otherCustomersAppointment($booking);
+
+    $this->getJson('/api/v1/appointments')
+        ->assertOk()
+        ->assertJsonCount(1, 'data')
+        ->assertJsonPath('data.0.id', $owned->id)
         ->assertJsonMissing(['id' => $other->id]);
-});
+})->with('booking');
 
-test('appointment list defaults to 20 items and rejects more than 100 per page', function () {
-    $fixture = phase6Fixture();
+it('returns the resource structure without internal fields', function (object $booking) {
+    existingAppointment($booking);
 
-    for ($i = 0; $i < 21; $i++) {
-        phase6CreateAppointment($fixture, [
-            'start_at' => CarbonImmutable::parse("2030-11-01 10:{$i}:00", 'UTC'),
-            'end_at' => CarbonImmutable::parse("2030-11-01 11:{$i}:00", 'UTC'),
+    $response = $this->getJson('/api/v1/appointments')
+        ->assertOk()
+        ->assertJsonStructure([
+            'data' => ['*' => appointmentResourceStructure()],
+            'links',
+            'meta',
+        ]);
+
+    foreach (internalAppointmentFields() as $field) {
+        $response->assertJsonMissingPath("data.0.{$field}");
+    }
+})->with('booking');
+
+it('paginates with a default of 20 and a maximum of 100 per page', function (object $booking) {
+    foreach (range(0, 20) as $day) {
+        $start = CarbonImmutable::parse('2030-11-01T10:00:00+07:00')->addDays($day);
+
+        existingAppointment($booking, [
+            'start_at' => $start->utc(),
+            'end_at' => $start->addHour()->utc(),
         ]);
     }
 
     $this->getJson('/api/v1/appointments')
         ->assertOk()
         ->assertJsonCount(20, 'data')
-        ->assertJsonPath('meta.per_page', 20);
+        ->assertJsonPath('meta.per_page', 20)
+        ->assertJsonPath('meta.total', 21);
 
     $this->getJson('/api/v1/appointments?page=2')
         ->assertOk()
         ->assertJsonCount(1, 'data')
         ->assertJsonPath('meta.current_page', 2);
 
-    $this->getJson('/api/v1/appointments?per_page=101')
-        ->assertUnprocessable();
-
     $this->getJson('/api/v1/appointments?per_page=100')
         ->assertOk()
+        ->assertJsonCount(21, 'data')
         ->assertJsonPath('meta.per_page', 100);
-});
 
-test('appointment list supports status and vehicle filters', function () {
-    $fixture = phase6Fixture();
-    $confirmed = phase6CreateAppointment($fixture, [
-        'vehicle_id' => $fixture['vehicle']->id,
-        'status' => 'confirmed',
-    ]);
-    $cancelled = phase6CreateAppointment($fixture, [
-        'vehicle_id' => $fixture['vehicle']->id,
-        'status' => 'cancelled',
-    ]);
-    $secondVehicleAppointment = phase6CreateAppointment($fixture, [
-        'vehicle_id' => $fixture['secondVehicle']->id,
-        'start_at' => CarbonImmutable::parse('2030-11-02T10:00:00+00:00'),
-        'end_at' => CarbonImmutable::parse('2030-11-02T11:00:00+00:00'),
+    $this->getJson('/api/v1/appointments?per_page=101')
+        ->assertUnprocessable();
+})->with('booking');
+
+it('filters by status and vehicle_id', function (object $booking) {
+    $secondVehicle = Vehicle::factory()->for($booking->customer)->create();
+
+    $confirmed = existingAppointment($booking);
+    $cancelled = existingAppointment($booking, ['status' => 'cancelled']);
+    $secondVehicleAppointment = existingAppointment($booking, [
+        'vehicle_id' => $secondVehicle->id,
+        'start_at' => utcTime('2030-11-02T10:00:00+07:00'),
+        'end_at' => utcTime('2030-11-02T11:00:00+07:00'),
     ]);
 
     $this->getJson('/api/v1/appointments?status=cancelled')
         ->assertOk()
-        ->assertJsonPath('data.0.id', $cancelled->id)
-        ->assertJsonMissing(['id' => $confirmed->id]);
+        ->assertJsonCount(1, 'data')
+        ->assertJsonPath('data.0.id', $cancelled->id);
 
-    $this->getJson('/api/v1/appointments?vehicle_id='.$fixture['secondVehicle']->id)
+    $this->getJson('/api/v1/appointments?vehicle_id='.$secondVehicle->id)
         ->assertOk()
+        ->assertJsonCount(1, 'data')
         ->assertJsonPath('data.0.id', $secondVehicleAppointment->id)
         ->assertJsonMissing(['id' => $confirmed->id]);
-});
+})->with('booking');
 
-test('appointment list orders by start_at descending and keeps cancelled appointments visible', function () {
-    $fixture = phase6Fixture();
-    $older = phase6CreateAppointment($fixture, [
-        'start_at' => CarbonImmutable::parse('2030-11-01T10:00:00+00:00'),
-        'end_at' => CarbonImmutable::parse('2030-11-01T11:00:00+00:00'),
-    ]);
-    $newerCancelled = phase6CreateAppointment($fixture, [
-        'start_at' => CarbonImmutable::parse('2030-11-03T10:00:00+00:00'),
-        'end_at' => CarbonImmutable::parse('2030-11-03T11:00:00+00:00'),
+it('orders by start_at descending and keeps cancelled appointments visible', function (object $booking) {
+    $older = existingAppointment($booking);
+    $newerCancelled = existingAppointment($booking, [
+        'start_at' => utcTime('2030-11-03T10:00:00+07:00'),
+        'end_at' => utcTime('2030-11-03T11:00:00+07:00'),
         'status' => 'cancelled',
     ]);
 
@@ -160,103 +117,113 @@ test('appointment list orders by start_at descending and keeps cancelled appoint
         ->assertJsonPath('data.0.id', $newerCancelled->id)
         ->assertJsonPath('data.0.status', 'cancelled')
         ->assertJsonPath('data.1.id', $older->id);
-});
+})->with('booking');
 
-test('customer can view their own appointment through AppointmentPolicy and resource', function () {
-    $fixture = phase6Fixture();
-    $appointment = phase6CreateAppointment($fixture);
+/*
+|--------------------------------------------------------------------------
+| Detail and ownership
+|--------------------------------------------------------------------------
+*/
+
+it('shows the customer their own appointment', function (object $booking) {
+    $appointment = existingAppointment($booking);
+
+    $response = $this->getJson('/api/v1/appointments/'.$appointment->id)
+        ->assertOk()
+        ->assertJsonStructure(['data' => appointmentResourceStructure()])
+        ->assertJsonPath('data.id', $appointment->id)
+        ->assertJsonPath('data.status', 'confirmed')
+        ->assertJsonPath('data.vehicle.id', $booking->vehicle->id)
+        ->assertJsonPath('data.dealership.id', $booking->dealership->id)
+        ->assertJsonPath('data.service_type.id', $booking->serviceType->id)
+        ->assertJsonPath('data.technician.id', $booking->technician->id)
+        ->assertJsonPath('data.service_bay.id', $booking->serviceBay->id);
+
+    foreach (internalAppointmentFields() as $field) {
+        $response->assertJsonMissingPath("data.{$field}");
+    }
+})->with('booking');
+
+it("forbids viewing another customer's appointment", function (object $booking) {
+    $appointment = otherCustomersAppointment($booking);
 
     $this->getJson('/api/v1/appointments/'.$appointment->id)
+        ->assertForbidden()
+        ->assertJsonPath('code', 'FORBIDDEN');
+})->with('booking');
+
+/*
+|--------------------------------------------------------------------------
+| Cancellation
+|--------------------------------------------------------------------------
+*/
+
+it('cancels a future confirmed appointment and returns the resource', function (object $booking) {
+    CarbonImmutable::setTestNow(utcTime('2030-10-01T10:00:00+07:00'));
+    $appointment = existingAppointment($booking);
+
+    $response = $this->postJson('/api/v1/appointments/'.$appointment->id.'/cancel')
         ->assertOk()
+        ->assertJsonStructure(['data' => appointmentResourceStructure()])
         ->assertJsonPath('data.id', $appointment->id)
-        ->assertJsonPath('data.vehicle.id', $fixture['vehicle']->id)
-        ->assertJsonPath('data.dealership.id', $fixture['dealership']->id)
-        ->assertJsonPath('data.service_type.id', $fixture['serviceType']->id)
-        ->assertJsonPath('data.technician.id', $fixture['technician']->id)
-        ->assertJsonPath('data.service_bay.id', $fixture['serviceBay']->id)
-        ->assertJsonMissingPath('data.customer_id');
-});
+        ->assertJsonPath('data.status', 'cancelled');
 
-test('customer cannot view another customers appointment', function () {
-    $fixture = phase6Fixture();
-    $otherCustomer = Customer::factory()->create();
-    $otherVehicle = Vehicle::factory()->for($otherCustomer)->create();
-    $appointment = phase6CreateAppointment($fixture, [
-        'customer_id' => $otherCustomer->id,
-        'vehicle_id' => $otherVehicle->id,
-    ]);
-
-    $this->getJson('/api/v1/appointments/'.$appointment->id)
-        ->assertForbidden();
-});
-
-test('customer can cancel a future confirmed appointment and receives the resource', function () {
-    $fixture = phase6Fixture();
-    CarbonImmutable::setTestNow(CarbonImmutable::parse('2030-10-01T10:00:00+00:00'));
-    $appointment = phase6CreateAppointment($fixture);
-
-    $this->postJson('/api/v1/appointments/'.$appointment->id.'/cancel')
-        ->assertOk()
-        ->assertJsonPath('data.id', $appointment->id)
-        ->assertJsonPath('data.status', 'cancelled')
-        ->assertJsonMissingPath('data.customer_id');
+    foreach (internalAppointmentFields() as $field) {
+        $response->assertJsonMissingPath("data.{$field}");
+    }
 
     expect($appointment->fresh()->status)->toBe('cancelled');
+})->with('booking');
 
-    CarbonImmutable::setTestNow();
-});
+it('has no minimum cancellation notice', function (object $booking) {
+    CarbonImmutable::setTestNow(utcTime('2030-11-01T09:59:00+07:00'));
+    $appointment = existingAppointment($booking);
 
-test('started appointment cannot be cancelled', function () {
-    $fixture = phase6Fixture();
-    CarbonImmutable::setTestNow(CarbonImmutable::parse('2030-11-01T10:00:00+00:00'));
-    $appointment = phase6CreateAppointment($fixture);
+    $this->postJson('/api/v1/appointments/'.$appointment->id.'/cancel')
+        ->assertOk()
+        ->assertJsonPath('data.status', 'cancelled');
+})->with('booking');
+
+it('refuses to cancel started or already cancelled appointments', function (object $booking, string $now, string $status) {
+    CarbonImmutable::setTestNow(utcTime($now));
+    $appointment = existingAppointment($booking, ['status' => $status]);
 
     $this->postJson('/api/v1/appointments/'.$appointment->id.'/cancel')
         ->assertStatus(409)
         ->assertJsonPath('code', 'APPOINTMENT_CANNOT_BE_CANCELLED');
+
+    expect($appointment->fresh()->status)->toBe($status);
+})->with('booking')->with([
+    'starting right now' => ['2030-11-01T10:00:00+07:00', 'confirmed'],
+    'already in progress' => ['2030-11-01T10:30:00+07:00', 'confirmed'],
+    'already cancelled' => ['2030-10-01T10:00:00+07:00', 'cancelled'],
+]);
+
+it("forbids cancelling another customer's appointment and leaves it untouched", function (object $booking) {
+    CarbonImmutable::setTestNow(utcTime('2030-10-01T10:00:00+07:00'));
+    $appointment = otherCustomersAppointment($booking);
+
+    $this->postJson('/api/v1/appointments/'.$appointment->id.'/cancel')
+        ->assertForbidden()
+        ->assertJsonPath('code', 'FORBIDDEN');
 
     expect($appointment->fresh()->status)->toBe('confirmed');
+})->with('booking');
 
-    CarbonImmutable::setTestNow();
-});
+it('releases the resources of a cancelled appointment and rebooking creates a separate one', function (object $booking) {
+    CarbonImmutable::setTestNow(utcTime('2030-10-01T10:00:00+07:00'));
+    $original = existingAppointment($booking);
 
-test('already cancelled appointment cannot be cancelled again', function () {
-    $fixture = phase6Fixture();
-    CarbonImmutable::setTestNow(CarbonImmutable::parse('2030-10-01T10:00:00+00:00'));
-    $appointment = phase6CreateAppointment($fixture, ['status' => 'cancelled']);
+    $this->postJson('/api/v1/appointments/'.$original->id.'/cancel')->assertOk();
 
-    $this->postJson('/api/v1/appointments/'.$appointment->id.'/cancel')
-        ->assertStatus(409)
-        ->assertJsonPath('code', 'APPOINTMENT_CANNOT_BE_CANCELLED');
-
-    CarbonImmutable::setTestNow();
-});
-
-test('customer cannot cancel another customers appointment', function () {
-    $fixture = phase6Fixture();
-    $otherCustomer = Customer::factory()->create();
-    $otherVehicle = Vehicle::factory()->for($otherCustomer)->create();
-    $appointment = phase6CreateAppointment($fixture, [
-        'customer_id' => $otherCustomer->id,
-        'vehicle_id' => $otherVehicle->id,
-    ]);
-
-    $this->postJson('/api/v1/appointments/'.$appointment->id.'/cancel')
-        ->assertForbidden();
-});
-
-test('cancelled appointment no longer blocks its technician and service bay', function () {
-    $fixture = phase6Fixture();
-    CarbonImmutable::setTestNow(CarbonImmutable::parse('2030-10-01T10:00:00+00:00'));
-    $appointment = phase6CreateAppointment($fixture);
-
-    $this->postJson('/api/v1/appointments/'.$appointment->id.'/cancel')
-        ->assertOk();
-
-    $this->postJson('/api/v1/appointments', phase6AppointmentPayload($fixture))
+    $newId = $this->postJson('/api/v1/appointments', bookingPayload($booking))
         ->assertCreated()
-        ->assertJsonPath('data.technician.id', $fixture['technician']->id)
-        ->assertJsonPath('data.service_bay.id', $fixture['serviceBay']->id);
+        ->assertJsonPath('data.technician.id', $booking->technician->id)
+        ->assertJsonPath('data.service_bay.id', $booking->serviceBay->id)
+        ->json('data.id');
 
-    CarbonImmutable::setTestNow();
-});
+    expect($newId)->not->toBe($original->id)
+        ->and(Appointment::query()->count())->toBe(2)
+        ->and($original->fresh()->status)->toBe('cancelled')
+        ->and(Appointment::query()->findOrFail($newId)->status)->toBe('confirmed');
+})->with('booking');

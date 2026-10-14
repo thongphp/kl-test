@@ -251,11 +251,11 @@ Those values are derived by the application.
 
 ## Current Implementation Status
 
-> Updated after Phase 0, Phase 1, Phase 2, Phase 3, Phase 4, and Phase 5 were completed and verified.
+> Updated after Phase 0 through Phase 8 were completed and verified.
 
 ### Overall
 
-- **Current phase:** Phase 6 — API Resources & Endpoints
+- **Current phase:** Phase 9 — Production Hardening
 - **Phase 0 status:** ✅ Done
 - **Phase 1 status:** ✅ Done
 - **Phase 2 status:** ✅ Done
@@ -263,7 +263,9 @@ Those values are derived by the application.
 - **Phase 4 status:** ✅ Done
 - **Phase 5 status:** ✅ Done
 - **Phase 6 status:** ✅ Done
-- **Next phase:** Phase 7 — Error Handling & API Contract
+- **Phase 7 status:** ✅ Done
+- **Phase 8 status:** ✅ Done (parallel concurrency tests moved to Phase 9)
+- **Next phase:** Phase 9 — Production Hardening
 
 ### Phase status
 
@@ -274,8 +276,8 @@ Those values are derived by the application.
 - [x] **Phase 4 — Transaction & Concurrency Protection** — Done
 - [x] **Phase 5 — Idempotency** — Done
 - [x] **Phase 6 — API Resources & Endpoints** — Done
-- [ ] **Phase 7 — Error Handling & API Contract** — Not started
-- [ ] **Phase 8 — Complete Automated Test Suite** — Not started
+- [x] **Phase 7 — Error Handling & API Contract** — Done
+- [x] **Phase 8 — Complete Automated Test Suite** — Done
 - [ ] **Phase 9 — Production Hardening** — Not started
 
 ---
@@ -958,6 +960,7 @@ All business conflict exceptions return HTTP `409`.
 ```text
 DEALERSHIP_INACTIVE
 SERVICE_TYPE_INACTIVE
+SERVICE_TYPE_INVALID_DURATION
 IDEMPOTENCY_KEY_MISMATCH
 ```
 
@@ -978,6 +981,8 @@ This preserves the existing Phase 3 ownership behavior and is intentionally not 
 - [x] Do not reveal specific technician/bay availability details.
 - [x] Keep the existing vehicle ownership behavior: another customer's vehicle returns `422`.
 - [x] Add API error tests.
+- [x] Map authorization failures to `403 FORBIDDEN` (render mapping for `AccessDeniedHttpException` on `api/*`).
+- [x] Reject malformed JSON bodies with `400 BAD_REQUEST` (`RejectMalformedJson` API middleware, runs before authentication).
 
 ### Testing
 
@@ -1015,58 +1020,76 @@ Create confidence that the MVP works as a complete system.
 
 Use Pest for unit and feature/integration tests.
 
+## Status
+
+✅ **Done.** The complete suite passes locally on SQLite. True parallel-request tests need MySQL/PostgreSQL and are tracked in Phase 9 (they exist as `->todo()` placeholders).
+
+## Test layout
+
+All tests share one lazily-resolved `booking` dataset (`tests/Datasets/Booking.php`); shared helpers live in `tests/Pest.php`.
+
+| File | Covers |
+|---|---|
+| `BookingModelsTest` | UUIDs, soft deletes, factories, active flag, status, relationships |
+| `CreateAppointmentTest` | Success, `end_at`/UTC, validation, ownership, business-rule codes |
+| `ResourceAllocationTest` | Technician/bay selection, busy-skip, overlap per resource type, cancelled not blocking |
+| `AppointmentLifecycleTest` | List, filters, pagination, detail, cancellation, rebooking |
+| `IdempotencyTest` | Replay, mismatch, scoping, retention/expiry, rollback, uniqueness, fingerprint |
+| `BookingReliabilityTest` | Rollback, Redis lock/index/fallback, DB authority, sequential double-booking |
+| `ApiErrorContractTest` | 401/404/400, validation format, no information leaks |
+
 ## Test categories
 
 ### Domain/model tests
 
-- [ ] Relationships.
-- [ ] UUID behavior.
-- [ ] Soft-delete behavior.
-- [ ] Status behavior.
-- [ ] Factory validity.
+- [x] Relationships.
+- [x] UUID behavior.
+- [x] Soft-delete behavior.
+- [x] Status behavior.
+- [x] Factory validity.
 
 ### Customer/ownership tests
 
-- [ ] Own vehicle accepted.
-- [ ] Other customer's vehicle rejected.
-- [ ] Own appointment visible.
-- [ ] Other customer's appointment hidden.
-- [ ] Own appointment cancellable.
-- [ ] Other customer's appointment not cancellable.
+- [x] Own vehicle accepted.
+- [x] Other customer's vehicle rejected.
+- [x] Own appointment visible.
+- [x] Other customer's appointment hidden.
+- [x] Own appointment cancellable.
+- [x] Other customer's appointment not cancellable.
 
 ### ServiceType tests
 
-- [ ] Active ServiceType accepted.
-- [ ] Inactive ServiceType rejected.
-- [ ] Positive duration accepted.
-- [ ] Invalid duration rejected.
-- [ ] Duration determines `end_at`.
+- [x] Active ServiceType accepted.
+- [x] Inactive ServiceType rejected.
+- [x] Positive duration accepted.
+- [x] Invalid duration rejected.
+- [x] Duration determines `end_at`.
 
 ### Dealership tests
 
-- [ ] Active dealership accepted.
-- [ ] Inactive dealership rejected.
-- [ ] Resources must belong to dealership.
+- [x] Active dealership accepted.
+- [x] Inactive dealership rejected.
+- [x] Resources must belong to dealership.
 
 ### Technician tests
 
-- [ ] Active technician selected.
-- [ ] Inactive technician ignored.
-- [ ] Technician from another dealership ignored.
-- [ ] Busy technician ignored.
-- [ ] Deterministic selection.
+- [x] Active technician selected.
+- [x] Inactive technician ignored.
+- [x] Technician from another dealership ignored.
+- [x] Busy technician ignored.
+- [x] Deterministic selection.
 
 ### Service Bay tests
 
-- [ ] Active bay selected.
-- [ ] Inactive bay ignored.
-- [ ] Bay from another dealership ignored.
-- [ ] Busy bay ignored.
-- [ ] Deterministic selection.
+- [x] Active bay selected.
+- [x] Inactive bay ignored.
+- [x] Bay from another dealership ignored.
+- [x] Busy bay ignored.
+- [x] Deterministic selection.
 
 ### Overlap tests
 
-For both resource types:
+For both resource types (each interval is run once with only the technician contended and once with only the bay contended):
 
 ```text
 Existing:   10:00 - 11:00
@@ -1074,20 +1097,20 @@ Existing:   10:00 - 11:00
 
 Test:
 
-- [ ] 09:30 - 10:30 → conflict.
-- [ ] 10:30 - 11:30 → conflict.
-- [ ] 10:15 - 10:45 → conflict.
-- [ ] 09:00 - 12:00 → conflict.
-- [ ] 10:00 - 11:00 → conflict.
-- [ ] 09:00 - 10:00 → allowed.
-- [ ] 11:00 - 12:00 → allowed.
+- [x] 09:30 - 10:30 → conflict.
+- [x] 10:30 - 11:30 → conflict.
+- [x] 10:15 - 10:45 → conflict.
+- [x] 09:00 - 12:00 → conflict.
+- [x] 10:00 - 11:00 → conflict.
+- [x] 09:00 - 10:00 → allowed.
+- [x] 11:00 - 12:00 → allowed.
 
 ### Transaction tests
 
-- [ ] Technician unavailable → rollback.
-- [ ] Bay unavailable → rollback.
-- [ ] Appointment creation failure → rollback.
-- [ ] No partial resources/appointment remain.
+- [x] Technician unavailable → rollback.
+- [x] Bay unavailable → rollback.
+- [x] Appointment creation failure → rollback.
+- [x] No partial resources/appointment remain.
 
 ### Idempotency tests
 
@@ -1102,37 +1125,40 @@ Test:
 
 ### Cancellation tests
 
-- [ ] Confirmed → cancelled.
-- [ ] Started appointment rejected.
-- [ ] Already cancelled rejected.
-- [ ] Cancelled no longer blocks resources.
-- [ ] Rebooking creates a separate appointment.
+- [x] Confirmed → cancelled.
+- [x] Started appointment rejected.
+- [x] Already cancelled rejected.
+- [x] Cancelled no longer blocks resources.
+- [x] Rebooking creates a separate appointment.
 
 ### API tests
 
-- [ ] Authentication.
-- [ ] Create.
-- [ ] List.
-- [ ] Detail.
-- [ ] Cancel.
-- [ ] Validation errors.
-- [ ] Conflict errors.
-- [ ] Resource response structure.
-- [ ] Pagination.
-- [ ] Filters.
+- [x] Authentication.
+- [x] Create.
+- [x] List.
+- [x] Detail.
+- [x] Cancel.
+- [x] Validation errors.
+- [x] Conflict errors.
+- [x] Resource response structure.
+- [x] Pagination.
+- [x] Filters.
 
 ### Concurrency tests
 
-- [ ] Two overlapping requests cannot both reserve the same technician.
-- [ ] Two overlapping requests cannot both reserve the same bay.
-- [ ] Same dealership contention behaves correctly.
-- [ ] Different dealerships do not unnecessarily conflict.
-- [ ] Lock failure maps correctly when Redis locking is enabled.
-- [ ] DB remains the final authority.
+- [x] Two overlapping requests from different customers cannot both reserve the same technician (sequential).
+- [x] Two overlapping requests from different customers cannot both reserve the same bay (sequential).
+- [x] Same dealership contention behaves correctly (`409 BOOKING_IN_PROGRESS`, and a retry succeeds once the lock is free).
+- [x] Different dealerships do not unnecessarily conflict.
+- [x] Lock failure maps correctly when Redis locking is enabled.
+- [x] Redis availability is indexed only after commit and never after a rollback.
+- [x] DB remains the final authority (a stale Redis candidate cannot cause a double booking).
+
+True parallel-request tests are moved to Phase 9 (see "Parallel concurrency tests").
 
 ### Exit criteria
 
-The complete automated suite passes locally and covers all critical business and concurrency rules.
+The complete automated suite passes locally and covers all critical business rules and the sequential/deterministic concurrency rules. Parallel-request tests are tracked in Phase 9.
 
 ---
 
@@ -1161,6 +1187,15 @@ Prepare the implementation for PostgreSQL/MySQL and production-like behavior.
 - [ ] Display appointments in dealership timezone.
 - [ ] Service duration remains timezone-independent.
 - [ ] Do not implement operating-hours validation in MVP.
+
+### Parallel concurrency tests
+
+Move the `->todo()` placeholders in `BookingReliabilityTest` and `IdempotencyTest` to real tests. They require MySQL/PostgreSQL and a non-transactional DB trait, because SQLite ignores `lockForUpdate()` and `RefreshDatabase` wraps each test in a transaction.
+
+- [ ] Two parallel requests cannot both reserve the same technician.
+- [ ] Two parallel requests cannot both reserve the same service bay.
+- [ ] Parallel bookings for the same dealership are serialised.
+- [ ] Parallel requests with the same idempotency key create exactly one appointment.
 
 ### Redis
 
@@ -1286,29 +1321,29 @@ The MVP is ready when all of the following are true:
 
 ## Functional
 
-- [ ] Customer can authenticate.
-- [ ] Customer can book an owned vehicle.
-- [ ] Customer can select dealership.
-- [ ] Customer can select ServiceType.
-- [ ] Customer can select start time.
-- [ ] Server calculates duration/end time.
-- [ ] Server selects technician.
-- [ ] Server selects service bay.
-- [ ] Booking is atomic.
-- [ ] Overlap rules work.
-- [ ] Back-to-back appointments work.
-- [ ] Customer can list appointments.
-- [ ] Customer can retrieve an appointment.
-- [ ] Customer can cancel an appointment.
-- [ ] Cancelled appointments no longer block resources.
+- [x] Customer can authenticate.
+- [x] Customer can book an owned vehicle.
+- [x] Customer can select dealership.
+- [x] Customer can select ServiceType.
+- [x] Customer can select start time.
+- [x] Server calculates duration/end time.
+- [x] Server selects technician.
+- [x] Server selects service bay.
+- [x] Booking is atomic.
+- [x] Overlap rules work.
+- [x] Back-to-back appointments work.
+- [x] Customer can list appointments.
+- [x] Customer can retrieve an appointment.
+- [x] Customer can cancel an appointment.
+- [x] Cancelled appointments no longer block resources.
 - [x] Idempotency prevents duplicate bookings.
 
 ## Security/authorization
 
-- [ ] Customer identity comes from authentication.
-- [ ] Customer cannot book another customer's vehicle.
-- [ ] Customer cannot access another customer's appointment.
-- [ ] Customer cannot cancel another customer's appointment.
+- [x] Customer identity comes from authentication.
+- [x] Customer cannot book another customer's vehicle.
+- [x] Customer cannot access another customer's appointment.
+- [x] Customer cannot cancel another customer's appointment.
 
 ## Reliability
 
@@ -1320,13 +1355,13 @@ The MVP is ready when all of the following are true:
 
 ## API
 
-- [ ] API uses `/api/v1`.
-- [ ] API Resources are used.
-- [ ] HTTP status codes are correct.
-- [ ] Error codes are consistent.
-- [ ] Pagination works.
-- [ ] Filters work.
-- [ ] Timezone behavior is correct.
+- [x] API uses `/api/v1`.
+- [x] API Resources are used.
+- [x] HTTP status codes are correct.
+- [x] Error codes are consistent.
+- [x] Pagination works.
+- [x] Filters work.
+- [ ] Timezone behavior is correct (future-date validation and dealership timezone, Phase 9).
 
 ## Testing
 
@@ -1335,8 +1370,8 @@ The MVP is ready when all of the following are true:
 - [x] Overlap tests pass.
 - [x] Transaction tests pass.
 - [x] Idempotency tests pass.
-- [ ] Cancellation tests for the complete API lifecycle.
-- [ ] Complete concurrency stress tests.
+- [x] Cancellation tests for the complete API lifecycle.
+- [ ] Complete concurrency stress tests (parallel requests, Phase 9).
 - [ ] Production-like DB tests.
 
 ---

@@ -2,400 +2,161 @@
 
 use App\Models\Appointment;
 use App\Models\Customer;
-use App\Models\Dealership;
-use App\Models\ServiceBay;
-use App\Models\ServiceType;
-use App\Models\Technician;
 use App\Models\Vehicle;
-use Carbon\CarbonImmutable;
+use Illuminate\Support\Arr;
+use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
 
-/**
- * Eloquent formats dates as "Y-m-d H:i:s" without converting the timezone,
- * so times must be normalised to UTC before they are persisted. Offsets are
- * explicit (+07:00) so they line up with the requested start_at in the API calls.
- */
-function utcTime(string $time): CarbonImmutable
-{
-    return CarbonImmutable::parse($time)->utc();
-}
+/*
+|--------------------------------------------------------------------------
+| POST /api/v1/appointments: success
+|--------------------------------------------------------------------------
+*/
 
-function bookingFixture(): array
-{
-    $customer = Customer::factory()->create();
-    $vehicle = Vehicle::factory()->for($customer)->create();
-    $dealership = Dealership::factory()->create();
-    $technician = Technician::factory()->for($dealership)->create(['active' => true]);
-    $serviceBay = ServiceBay::factory()->for($dealership)->create(['active' => true]);
-    $serviceType = ServiceType::factory()->create(['duration' => 60, 'active' => true]);
-
-    Sanctum::actingAs($customer);
-
-    return compact('customer', 'vehicle', 'dealership', 'technician', 'serviceBay', 'serviceType');
-}
-
-test('creates a confirmed appointment with server-derived end time and resources', function () {
-    $fixture = bookingFixture();
-
-    $response = $this->postJson('/api/v1/appointments', [
-        'vehicle_id' => $fixture['vehicle']->id,
-        'dealership_id' => $fixture['dealership']->id,
-        'service_type_id' => $fixture['serviceType']->id,
-        'start_at' => '2026-11-01T10:00:00+07:00',
-    ]);
-
-    $response->assertCreated()
+it('creates a confirmed appointment with server-derived end time and resources', function (object $booking) {
+    $response = $this->postJson('/api/v1/appointments', bookingPayload($booking))
+        ->assertCreated()
+        ->assertJsonStructure(['data' => appointmentResourceStructure()])
         ->assertJsonPath('data.id', Appointment::query()->firstOrFail()->id)
         ->assertJsonPath('data.status', 'confirmed')
-        ->assertJsonPath('data.vehicle.id', $fixture['vehicle']->id)
-        ->assertJsonPath('data.vehicle.name', $fixture['vehicle']->name)
-        ->assertJsonPath('data.dealership.id', $fixture['dealership']->id)
-        ->assertJsonPath('data.dealership.name', $fixture['dealership']->name)
-        ->assertJsonPath('data.service_type.id', $fixture['serviceType']->id)
-        ->assertJsonPath('data.service_type.name', $fixture['serviceType']->name)
-        ->assertJsonPath('data.technician.id', $fixture['technician']->id)
-        ->assertJsonPath('data.technician.name', $fixture['technician']->name)
-        ->assertJsonPath('data.service_bay.id', $fixture['serviceBay']->id)
-        ->assertJsonPath('data.service_bay.name', $fixture['serviceBay']->name)
-        ->assertJsonMissingPath('data.customer_id')
-        ->assertJsonMissingPath('data.vehicle_id')
-        ->assertJsonMissingPath('data.dealership_id')
-        ->assertJsonMissingPath('data.service_type_id')
-        ->assertJsonMissingPath('data.technician_id')
-        ->assertJsonMissingPath('data.service_bay_id');
+        ->assertJsonPath('data.vehicle.id', $booking->vehicle->id)
+        ->assertJsonPath('data.vehicle.name', $booking->vehicle->name)
+        ->assertJsonPath('data.dealership.id', $booking->dealership->id)
+        ->assertJsonPath('data.dealership.name', $booking->dealership->name)
+        ->assertJsonPath('data.service_type.id', $booking->serviceType->id)
+        ->assertJsonPath('data.service_type.name', $booking->serviceType->name)
+        ->assertJsonPath('data.technician.id', $booking->technician->id)
+        ->assertJsonPath('data.technician.name', $booking->technician->name)
+        ->assertJsonPath('data.service_bay.id', $booking->serviceBay->id)
+        ->assertJsonPath('data.service_bay.name', $booking->serviceBay->name);
+
+    foreach (internalAppointmentFields() as $field) {
+        $response->assertJsonMissingPath("data.{$field}");
+    }
 
     $appointment = Appointment::query()->firstOrFail();
-    expect($appointment->start_at->utc()->format('Y-m-d H:i:s'))->toBe('2026-11-01 03:00:00')
-        ->and($appointment->end_at->utc()->format('Y-m-d H:i:s'))->toBe('2026-11-01 04:00:00');
-});
 
-test('rejects unauthenticated booking', function () {
-    $this->postJson('/api/v1/appointments', [])->assertUnauthorized();
-});
+    expect($appointment->customer_id)->toBe($booking->customer->id)
+        ->and($appointment->start_at->utc()->format('Y-m-d H:i:s'))->toBe('2030-11-01 03:00:00')
+        ->and($appointment->end_at->utc()->format('Y-m-d H:i:s'))->toBe('2030-11-01 04:00:00');
+})->with('booking');
 
-test('rejects another customers vehicle', function () {
-    $fixture = bookingFixture();
-    $otherCustomer = Customer::factory()->create();
-    $vehicle = Vehicle::factory()->for($otherCustomer)->create();
+it('derives end_at from the service type duration', function (object $booking, int $minutes) {
+    $booking->serviceType->update(['duration' => $minutes]);
 
-    $this->postJson('/api/v1/appointments', [
-        'vehicle_id' => $vehicle->id,
-        'dealership_id' => $fixture['dealership']->id,
-        'service_type_id' => $fixture['serviceType']->id,
-        'start_at' => '2026-11-01T10:00:00+07:00',
-    ])->assertUnprocessable();
-});
+    $id = $this->postJson('/api/v1/appointments', bookingPayload($booking))
+        ->assertCreated()
+        ->json('data.id');
 
-test('rejects unavailable vehicle', function () {
-    $fixture = bookingFixture();
-    $fixture['vehicle']->update(['status' => 'unavailable']);
+    $appointment = Appointment::query()->findOrFail($id);
 
-    $this->postJson('/api/v1/appointments', [
-        'vehicle_id' => $fixture['vehicle']->id,
-        'dealership_id' => $fixture['dealership']->id,
-        'service_type_id' => $fixture['serviceType']->id,
-        'start_at' => '2026-11-01T10:00:00+07:00',
-    ])->assertUnprocessable();
-});
-
-test('rejects inactive dealership', function () {
-    $fixture = bookingFixture();
-    $fixture['dealership']->update(['active' => false]);
-
-    $this->postJson('/api/v1/appointments', [
-        'vehicle_id' => $fixture['vehicle']->id,
-        'dealership_id' => $fixture['dealership']->id,
-        'service_type_id' => $fixture['serviceType']->id,
-        'start_at' => '2026-11-01T10:00:00+07:00',
-    ])->assertUnprocessable();
-});
-
-test('rejects inactive service type', function () {
-    $fixture = bookingFixture();
-    $fixture['serviceType']->update(['active' => false]);
-
-    $this->postJson('/api/v1/appointments', [
-        'vehicle_id' => $fixture['vehicle']->id,
-        'dealership_id' => $fixture['dealership']->id,
-        'service_type_id' => $fixture['serviceType']->id,
-        'start_at' => '2026-11-01T10:00:00+07:00',
-    ])->assertUnprocessable();
-});
-
-test('rejects invalid service type duration', function () {
-    $fixture = bookingFixture();
-    $fixture['serviceType']->update(['duration' => 0]);
-
-    $this->postJson('/api/v1/appointments', [
-        'vehicle_id' => $fixture['vehicle']->id,
-        'dealership_id' => $fixture['dealership']->id,
-        'service_type_id' => $fixture['serviceType']->id,
-        'start_at' => '2026-11-01T10:00:00+07:00',
-    ])->assertUnprocessable();
-});
-
-test('rejects missing or invalid start time', function () {
-    $fixture = bookingFixture();
-
-    $this->postJson('/api/v1/appointments', [
-        'vehicle_id' => $fixture['vehicle']->id,
-        'dealership_id' => $fixture['dealership']->id,
-        'service_type_id' => $fixture['serviceType']->id,
-    ])->assertUnprocessable();
-
-    $this->postJson('/api/v1/appointments', [
-        'vehicle_id' => $fixture['vehicle']->id,
-        'dealership_id' => $fixture['dealership']->id,
-        'service_type_id' => $fixture['serviceType']->id,
-        'start_at' => '2026-11-01 10:00:00',
-    ])->assertUnprocessable();
-});
-
-test('rejects client supplied server-owned booking fields', function () {
-    $fixture = bookingFixture();
-
-    $this->postJson('/api/v1/appointments', [
-        'vehicle_id' => $fixture['vehicle']->id,
-        'dealership_id' => $fixture['dealership']->id,
-        'service_type_id' => $fixture['serviceType']->id,
-        'start_at' => '2026-11-01T10:00:00+07:00',
-        'end_at' => '2026-11-01T11:00:00+07:00',
-        'technician_id' => $fixture['technician']->id,
-        'service_bay_id' => $fixture['serviceBay']->id,
-        'customer_id' => $fixture['customer']->id,
-    ])->assertUnprocessable();
-});
-
-test('rejects when a technician overlaps', function () {
-    $fixture = bookingFixture();
-    Appointment::factory()->create([
-        'customer_id' => $fixture['customer']->id,
-        'vehicle_id' => $fixture['vehicle']->id,
-        'dealership_id' => $fixture['dealership']->id,
-        'service_type_id' => $fixture['serviceType']->id,
-        'technician_id' => $fixture['technician']->id,
-        'service_bay_id' => $fixture['serviceBay']->id,
-        'start_at' => utcTime('2026-11-01T10:30:00+07:00'),
-        'end_at' => utcTime('2026-11-01T11:30:00+07:00'),
-        'status' => 'confirmed',
-    ]);
-
-    $this->postJson('/api/v1/appointments', [
-        'vehicle_id' => $fixture['vehicle']->id,
-        'dealership_id' => $fixture['dealership']->id,
-        'service_type_id' => $fixture['serviceType']->id,
-        'start_at' => '2026-11-01T10:00:00+07:00',
-    ])->assertStatus(409);
-});
-
-test('allows back to back appointment', function () {
-    $fixture = bookingFixture();
-    Appointment::factory()->create([
-        'customer_id' => $fixture['customer']->id,
-        'vehicle_id' => $fixture['vehicle']->id,
-        'dealership_id' => $fixture['dealership']->id,
-        'service_type_id' => $fixture['serviceType']->id,
-        'technician_id' => $fixture['technician']->id,
-        'service_bay_id' => $fixture['serviceBay']->id,
-        'start_at' => utcTime('2026-11-01T10:00:00+07:00'),
-        'end_at' => utcTime('2026-11-01T11:00:00+07:00'),
-        'status' => 'confirmed',
-    ]);
-
-    $this->postJson('/api/v1/appointments', [
-        'vehicle_id' => $fixture['vehicle']->id,
-        'dealership_id' => $fixture['dealership']->id,
-        'service_type_id' => $fixture['serviceType']->id,
-        'start_at' => '2026-11-01T11:00:00+07:00',
-    ])->assertCreated();
-});
-
-test('cancelled appointments do not block resources', function () {
-    $fixture = bookingFixture();
-    Appointment::factory()->create([
-        'customer_id' => $fixture['customer']->id,
-        'vehicle_id' => $fixture['vehicle']->id,
-        'dealership_id' => $fixture['dealership']->id,
-        'service_type_id' => $fixture['serviceType']->id,
-        'technician_id' => $fixture['technician']->id,
-        'service_bay_id' => $fixture['serviceBay']->id,
-        'start_at' => utcTime('2026-11-01T10:00:00+07:00'),
-        'end_at' => utcTime('2026-11-01T11:00:00+07:00'),
-        'status' => 'cancelled',
-    ]);
-
-    $this->postJson('/api/v1/appointments', [
-        'vehicle_id' => $fixture['vehicle']->id,
-        'dealership_id' => $fixture['dealership']->id,
-        'service_type_id' => $fixture['serviceType']->id,
-        'start_at' => '2026-11-01T10:00:00+07:00',
-    ])->assertCreated();
-});
-
-test('rejects service bay overlap even when another technician is available', function () {
-    $fixture = bookingFixture();
-    $otherTechnician = Technician::factory()->for($fixture['dealership'])->create(['active' => true]);
-
-    Appointment::factory()->create([
-        'customer_id' => $fixture['customer']->id,
-        'vehicle_id' => $fixture['vehicle']->id,
-        'dealership_id' => $fixture['dealership']->id,
-        'service_type_id' => $fixture['serviceType']->id,
-        'technician_id' => $fixture['technician']->id,
-        'service_bay_id' => $fixture['serviceBay']->id,
-        'start_at' => utcTime('2026-11-01T10:30:00+07:00'),
-        'end_at' => utcTime('2026-11-01T11:30:00+07:00'),
-        'status' => 'confirmed',
-    ]);
-
-    $this->postJson('/api/v1/appointments', [
-        'vehicle_id' => $fixture['vehicle']->id,
-        'dealership_id' => $fixture['dealership']->id,
-        'service_type_id' => $fixture['serviceType']->id,
-        'start_at' => '2026-11-01T10:00:00+07:00',
-    ])->assertStatus(409);
-
-    expect($otherTechnician->exists)->toBeTrue();
-});
-
-test('ignores soft deleted technicians and service bays when selecting resources', function () {
-    $fixture = bookingFixture();
-    $fixture['technician']->delete();
-    $fixture['serviceBay']->delete();
-
-    $this->postJson('/api/v1/appointments', [
-        'vehicle_id' => $fixture['vehicle']->id,
-        'dealership_id' => $fixture['dealership']->id,
-        'service_type_id' => $fixture['serviceType']->id,
-        'start_at' => '2026-11-01T10:00:00+07:00',
-    ])->assertStatus(409);
-});
-
-test('ignores cancelled overlapping appointments for both resources', function () {
-    $fixture = bookingFixture();
-    Appointment::factory()->create([
-        'customer_id' => $fixture['customer']->id,
-        'vehicle_id' => $fixture['vehicle']->id,
-        'dealership_id' => $fixture['dealership']->id,
-        'service_type_id' => $fixture['serviceType']->id,
-        'technician_id' => $fixture['technician']->id,
-        'service_bay_id' => $fixture['serviceBay']->id,
-        'start_at' => utcTime('2026-11-01T09:30:00+07:00'),
-        'end_at' => utcTime('2026-11-01T11:30:00+07:00'),
-        'status' => 'cancelled',
-    ]);
-
-    $this->postJson('/api/v1/appointments', [
-        'vehicle_id' => $fixture['vehicle']->id,
-        'dealership_id' => $fixture['dealership']->id,
-        'service_type_id' => $fixture['serviceType']->id,
-        'start_at' => '2026-11-01T10:00:00+07:00',
-    ])->assertCreated();
-});
-
-it('applies the half-open overlap rule for the requested interval', function (string $existingStart, string $existingEnd, int $expectedStatus) {
-    $fixture = bookingFixture();
-
-    Appointment::factory()->create([
-        'customer_id' => $fixture['customer']->id,
-        'vehicle_id' => $fixture['vehicle']->id,
-        'dealership_id' => $fixture['dealership']->id,
-        'service_type_id' => $fixture['serviceType']->id,
-        'technician_id' => $fixture['technician']->id,
-        'service_bay_id' => $fixture['serviceBay']->id,
-        'start_at' => utcTime($existingStart),
-        'end_at' => utcTime($existingEnd),
-        'status' => 'confirmed',
-    ]);
-
-    $this->postJson('/api/v1/appointments', [
-        'vehicle_id' => $fixture['vehicle']->id,
-        'dealership_id' => $fixture['dealership']->id,
-        'service_type_id' => $fixture['serviceType']->id,
-        'start_at' => '2026-11-01T10:00:00+07:00',
-    ])->assertStatus($expectedStatus);
-})->with([
-    'exact overlap' => ['2026-11-01T10:00:00+07:00', '2026-11-01T11:00:00+07:00', 409],
-    'requested start inside existing' => ['2026-11-01T09:30:00+07:00', '2026-11-01T10:30:00+07:00', 409],
-    'requested end inside existing' => ['2026-11-01T10:30:00+07:00', '2026-11-01T11:30:00+07:00', 409],
-    'existing inside requested' => ['2026-11-01T10:15:00+07:00', '2026-11-01T10:45:00+07:00', 409],
-    'requested inside existing' => ['2026-11-01T09:30:00+07:00', '2026-11-01T11:30:00+07:00', 409],
-    'back-to-back before existing' => ['2026-11-01T11:00:00+07:00', '2026-11-01T12:00:00+07:00', 201],
-    'back-to-back after existing' => ['2026-11-01T09:00:00+07:00', '2026-11-01T10:00:00+07:00', 201],
+    expect($appointment->end_at->utc()->equalTo($appointment->start_at->copy()->utc()->addMinutes($minutes)))->toBeTrue();
+})->with('booking')->with([
+    '30 minutes' => 30,
+    '90 minutes' => 90,
+    '180 minutes' => 180,
 ]);
 
-test('rolls back appointment creation when persistence fails after resource selection', function () {
-    $fixture = bookingFixture();
+it('normalises any requested UTC offset to UTC storage', function (object $booking, string $startAt) {
+    $this->postJson('/api/v1/appointments', bookingPayload($booking, $startAt))->assertCreated();
 
-    $appointmentService = Mockery::mock(\App\Services\AppointmentService::class);
-    $appointmentService->shouldReceive('create')
-        ->once()
-        ->andThrow(new RuntimeException('simulated persistence failure'));
+    expect(Appointment::query()->firstOrFail()->start_at->utc()->format('Y-m-d H:i:s'))
+        ->toBe('2030-11-01 03:00:00');
+})->with('booking')->with([
+    '+07:00' => '2030-11-01T10:00:00+07:00',
+    'UTC' => '2030-11-01T03:00:00+00:00',
+    'negative offset' => '2030-10-31T22:00:00-05:00',
+]);
 
-    $this->app->instance(\App\Services\AppointmentService::class, $appointmentService);
-    $this->withoutExceptionHandling();
+/*
+|--------------------------------------------------------------------------
+| Validation
+|--------------------------------------------------------------------------
+*/
 
-    expect(fn () => $this->postJson('/api/v1/appointments', [
-        'vehicle_id' => $fixture['vehicle']->id,
-        'dealership_id' => $fixture['dealership']->id,
-        'service_type_id' => $fixture['serviceType']->id,
-        'start_at' => '2026-11-01T10:00:00+07:00',
-    ]))->toThrow(RuntimeException::class);
+it('reports every required field when the payload is empty', function () {
+    Sanctum::actingAs(Customer::factory()->create());
+
+    $this->postJson('/api/v1/appointments', [])
+        ->assertUnprocessable()
+        ->assertJsonStructure(['message', 'errors'])
+        ->assertJsonValidationErrors(['vehicle_id', 'dealership_id', 'service_type_id', 'start_at']);
+});
+
+it('rejects a missing or malformed start time', function (object $booking, ?string $startAt) {
+    $payload = Arr::except(bookingPayload($booking), 'start_at');
+
+    if ($startAt !== null) {
+        $payload['start_at'] = $startAt;
+    }
+
+    $this->postJson('/api/v1/appointments', $payload)
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors(['start_at']);
+})->with('booking')->with([
+    'missing' => [null],
+    'without timezone offset' => ['2030-11-01 10:00:00'],
+]);
+
+it('rejects client supplied server-owned booking fields', function (object $booking, string $field) {
+    $values = [
+        'end_at' => '2030-11-01T18:00:00+07:00',
+        'technician_id' => $booking->technician->id,
+        'service_bay_id' => $booking->serviceBay->id,
+        'customer_id' => $booking->customer->id,
+    ];
+
+    $this->postJson('/api/v1/appointments', bookingPayload($booking, overrides: [$field => $values[$field]]))
+        ->assertUnprocessable();
 
     expect(Appointment::query()->count())->toBe(0);
-});
+})->with('booking')->with(['end_at', 'technician_id', 'service_bay_id', 'customer_id']);
 
-test('maps Redis dealership lock contention to booking in progress conflict', function () {
-    $fixture = bookingFixture();
+it('rejects unknown related records', function (object $booking, string $field) {
+    $this->postJson('/api/v1/appointments', bookingPayload($booking, overrides: [$field => (string) Str::uuid()]))
+        ->assertUnprocessable();
+})->with('booking')->with(['vehicle_id', 'dealership_id', 'service_type_id']);
 
-    $lockService = Mockery::mock(\App\Services\RedisBookingLockService::class);
-    $lockService->shouldReceive('acquire')
-        ->once()
-        ->with($fixture['dealership']->id)
-        ->andThrow(new \App\Exceptions\BookingInProgressException());
+/*
+|--------------------------------------------------------------------------
+| Ownership and business rules
+|--------------------------------------------------------------------------
+*/
 
-    $this->app->instance(\App\Services\RedisBookingLockService::class, $lockService);
+it("rejects another customer's vehicle with a 422 validation error", function (object $booking) {
+    $otherVehicle = Vehicle::factory()->for(Customer::factory())->create();
 
-    $this->postJson('/api/v1/appointments', [
-        'vehicle_id' => $fixture['vehicle']->id,
-        'dealership_id' => $fixture['dealership']->id,
-        'service_type_id' => $fixture['serviceType']->id,
-        'start_at' => '2026-11-01T10:00:00+07:00',
-    ])->assertStatus(409)
-        ->assertJsonPath('code', 'BOOKING_IN_PROGRESS');
+    $this->postJson('/api/v1/appointments', bookingPayload($booking, overrides: [
+        'vehicle_id' => $otherVehicle->id,
+    ]))
+        ->assertUnprocessable()
+        ->assertJsonStructure(['message', 'errors']);
 
     expect(Appointment::query()->count())->toBe(0);
-});
+})->with('booking');
 
+it('rejects an unavailable vehicle', function (object $booking) {
+    $booking->vehicle->update(['status' => 'unavailable']);
 
-test('falls back to the database when Redis availability is unavailable', function () {
-    $fixture = bookingFixture();
+    $this->postJson('/api/v1/appointments', bookingPayload($booking))->assertUnprocessable();
+})->with('booking');
 
-    $lockService = Mockery::mock(\App\Services\RedisBookingLockService::class);
-    $lockService->shouldReceive('acquire')
-        ->once()
-        ->with($fixture['dealership']->id)
-        ->andReturn(null);
+it('rejects an inactive dealership', function (object $booking) {
+    $booking->dealership->update(['active' => false]);
 
-    $availabilityService = Mockery::mock(\App\Services\RedisAvailabilityService::class);
-    $availabilityService->shouldReceive('candidateTechnicianIds')
-        ->once()
-        ->andReturn(null);
-    $availabilityService->shouldReceive('candidateServiceBayIds')
-        ->once()
-        ->andReturn(null);
-    $availabilityService->shouldReceive('indexAppointment')
-        ->once();
+    $this->postJson('/api/v1/appointments', bookingPayload($booking))
+        ->assertUnprocessable()
+        ->assertJsonPath('code', 'DEALERSHIP_INACTIVE');
+})->with('booking');
 
-    $this->app->instance(\App\Services\RedisBookingLockService::class, $lockService);
-    $this->app->instance(\App\Services\RedisAvailabilityService::class, $availabilityService);
+it('rejects an unusable service type', function (object $booking, array $state, string $code) {
+    $booking->serviceType->update($state);
 
-    $this->postJson('/api/v1/appointments', [
-        'vehicle_id' => $fixture['vehicle']->id,
-        'dealership_id' => $fixture['dealership']->id,
-        'service_type_id' => $fixture['serviceType']->id,
-        'start_at' => '2026-11-01T10:00:00+07:00',
-    ])->assertCreated();
-
-    expect(Appointment::query()->count())->toBe(1);
-});
+    $this->postJson('/api/v1/appointments', bookingPayload($booking))
+        ->assertUnprocessable()
+        ->assertJsonPath('code', $code);
+})->with('booking')->with([
+    'inactive' => [['active' => false], 'SERVICE_TYPE_INACTIVE'],
+    'invalid duration' => [['duration' => 0], 'SERVICE_TYPE_INVALID_DURATION'],
+    'negative duration' => [['duration' => -30], 'SERVICE_TYPE_INVALID_DURATION'],
+]);
