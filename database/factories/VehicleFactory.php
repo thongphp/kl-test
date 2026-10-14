@@ -20,6 +20,7 @@ class VehicleFactory extends Factory
             'colors' => [fake()->safeColorName()],
             'pin' => strtoupper(fake()->unique()->bothify('???-#####')),
             'type' => 'car',
+            'status' => 'available',
         ];
     }
 }

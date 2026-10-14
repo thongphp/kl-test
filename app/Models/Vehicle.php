@@ -11,9 +11,11 @@ class Vehicle extends Model
 {
     use HasFactory, HasUuids, SoftDeletes;
 
-    protected $fillable = ['customer_id', 'name', 'brand', 'colors', 'pin', 'type'];
+    protected $fillable = ['customer_id', 'name', 'brand', 'colors', 'pin', 'type', 'status'];
 
-    protected $casts = ['colors' => 'array'];
+    protected $casts = [
+        'colors' => 'array',
+    ];
 
     protected $keyType = 'string';
 
