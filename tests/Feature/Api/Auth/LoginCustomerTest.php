@@ -10,7 +10,7 @@ it('logs a customer in', function () {
         'password' => 'password',
     ]);
 
-    $response = $this->postJson('/api/auth/login', [
+    $response = $this->postJson('/api/v1/auth/login', [
         'email' => 'customer@example.com',
         'password' => 'password',
     ]);
@@ -19,17 +19,22 @@ it('logs a customer in', function () {
         ->assertJsonPath('data.customer.email', 'customer@example.com')
         ->assertJsonPath('data.customer.first_name', 'John')
         ->assertJsonPath('data.customer.last_name', 'Doe')
-        ->assertJsonStructure(['data' => ['customer' => ['id', 'first_name', 'last_name', 'email'], 'token']]);
+        ->assertJsonStructure([
+            'data' => [
+                'customer' => ['id', 'first_name', 'last_name', 'email'],
+                'token',
+            ],
+        ]);
 });
 
 it('validates the login request', function () {
-    $this->postJson('/api/auth/login', [])
+    $this->postJson('/api/v1/auth/login', [])
         ->assertUnprocessable()
         ->assertJsonValidationErrors(['email', 'password']);
 });
 
 it('rejects invalid customer credentials', function () {
-    $this->postJson('/api/auth/login', [
+    $this->postJson('/api/v1/auth/login', [
         'email' => 'customer@example.com',
         'password' => 'wrong-password',
     ])->assertUnprocessable();
