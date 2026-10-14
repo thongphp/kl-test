@@ -14,19 +14,22 @@ RUN set -eux; \
         g++ \
         make \
         libtool \
-        git \
         curl \
         bash \
-        unzip \
         zlib-dev \
         libzip-dev \
         oniguruma-dev \
         postgresql-dev; \
     \
-    # runtime packages (keep minimal)
+    # runtime packages (must NOT be in .build-deps, or `apk del` below removes them)
+    # - libzip: shared library needed by the zip extension at runtime
+    # - git, unzip: needed by composer to install packages
     apk add --no-cache \
         postgresql-client \
-        icu-libs; \
+        icu-libs \
+        libzip \
+        git \
+        unzip; \
     \
     # Install and enable php extensions built-in
     docker-php-ext-install -j "$(nproc)" pdo_pgsql pgsql zip intl mbstring; \
@@ -53,9 +56,11 @@ RUN set -eux; \
 RUN chown -R www-data:www-data /var/www/html
 
 # Copy only composer files first to leverage Docker cache for composer install
-COPY composer.json composer.lock* ./ 
+COPY composer.json composer.lock* ./
 
-# Install PHP dependencies (production/dev as you prefer)
+# Note: docker-compose bind-mounts ./ over /var/www/html, so this vendor/ is hidden
+# at runtime. After `docker compose up -d`, run:
+#   docker compose exec app composer install
 RUN composer install --prefer-dist --no-interaction --no-progress --no-scripts || true
 
 # Copy application code (if building image with app code included)
