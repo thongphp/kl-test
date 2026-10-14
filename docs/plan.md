@@ -235,20 +235,21 @@ Those values are derived by the application.
 
 ## Current Implementation Status
 
-> Updated after Phase 0 was merged to `main` and the full test suite passed, and after preparing the Phase 1 implementation changes.
+> Updated after Phase 0, Phase 1, and Phase 2 were completed and verified.
 
 ### Overall
 
-- **Current phase:** Phase 1 — Domain Models & Database
+- **Current phase:** Phase 3 — ServiceType & Core Booking Domain
 - **Phase 0 status:** ✅ Done
-- **Phase 1 status:** 🟡 In progress — implementation prepared; local migration/re-migration and full test verification are still pending.
-- **Next phase:** Phase 2 — Authentication & Ownership, after Phase 1 exit criteria are verified and merged.
+- **Phase 1 status:** ✅ Done
+- **Phase 2 status:** ✅ Done
+- **Next phase:** Phase 3 — ServiceType & Core Booking Domain.
 
 ### Phase status
 
 - [x] **Phase 0 — Project Baseline** — Done
-- [ ] **Phase 1 — Domain Models & Database** — In progress
-- [ ] **Phase 2 — Authentication & Ownership** — Not started
+- [x] **Phase 1 — Domain Models & Database** — Done
+- [x] **Phase 2 — Authentication & Ownership** — Done
 - [ ] **Phase 3 — ServiceType & Core Booking Domain** — Not started
 - [ ] **Phase 4 — Transaction & Concurrency Protection** — Not started
 - [ ] **Phase 5 — Idempotency** — Not started
@@ -305,6 +306,10 @@ The project starts cleanly and the baseline test suite passes.
 
 Create the MVP domain model and database structure.
 
+### Status
+
+✅ **Done.** Phase 1 was implemented, migrated, seeded, and verified successfully.
+
 ### Models
 
 Implement:
@@ -322,14 +327,14 @@ Implement:
 
 Implement:
 
-- [ ] UUID primary keys.
-- [ ] Foreign keys.
-- [ ] Required indexes.
-- [ ] Soft-delete columns where appropriate.
-- [ ] Appointment timestamps.
-- [ ] ServiceType duration/status.
-- [ ] Appointment status.
-- [ ] Idempotency key fields.
+- [x] UUID primary keys.
+- [x] Foreign keys.
+- [x] Required indexes.
+- [x] Soft-delete columns where appropriate.
+- [x] Appointment timestamps.
+- [x] ServiceType duration/status.
+- [x] Appointment status.
+- [x] Idempotency key fields.
 
 ### Appointment indexes
 
@@ -390,27 +395,27 @@ Appointment
 - [x] Configure relationships.
 - [x] Add factories.
 - [x] Add seeders for development.
-- [ ] Run migrations from clean database.
-- [ ] Run rollback/re-migration.
-- [ ] Verify indexes.
+- [x] Run migrations from clean database.
+- [x] Run rollback/re-migration.
+- [x] Verify indexes.
 
 ### Testing
 
-- [ ] Model creation.
-- [ ] Relationship tests.
-- [ ] UUID generation.
-- [ ] Soft-deleted resources are excluded from normal queries.
-- [ ] Factory data is valid.
-- [ ] Clean migration/re-migration succeeds.
+- [x] Model creation.
+- [x] Relationship tests.
+- [x] UUID generation.
+- [x] Soft-deleted resources are excluded from normal queries.
+- [x] Factory data is valid.
+- [x] Clean migration/re-migration succeeds.
 
-### Verification pending
+### Verification
 
-The following must be confirmed locally after applying the Phase 1 ZIP:
+Phase 1 verification was completed successfully:
 
-- [ ] Run migrations from a clean database.
-- [ ] Run rollback/re-migration.
-- [ ] Verify indexes.
-- [ ] Run the complete Pest suite and confirm all Phase 1 tests pass.
+- [x] Run migrations from a clean database.
+- [x] Run rollback/re-migration.
+- [x] Verify indexes.
+- [x] Run the complete Pest suite and confirm all Phase 1 tests pass.
 
 ### Exit criteria
 
@@ -424,30 +429,55 @@ All domain models and relationships exist and the database can be recreated from
 
 Implement customer authentication and ownership boundaries.
 
+### Approved Phase 2 scope
+
+For this phase, implement authentication and ownership infrastructure only. Customer-facing appointment endpoints are intentionally deferred to their later API phase.
+
 ### Checklist
 
-- [ ] Install/configure Laravel Sanctum.
-- [ ] Authenticate API requests.
-- [ ] Resolve customer from authenticated user/context.
-- [ ] Never accept `customer_id` from booking requests.
-- [ ] Verify vehicle belongs to authenticated customer.
-- [ ] Scope appointment queries to authenticated customer.
-- [ ] Protect appointment detail.
-- [ ] Protect cancellation.
-- [ ] Return appropriate unauthorized/forbidden/not-found responses.
+- [x] Install/configure Laravel Sanctum.
+- [x] Authenticate API requests through the `auth:sanctum` middleware.
+- [x] Resolve customer from the authenticated user/context.
+- [ ] Never accept `customer_id` from booking requests. — Deferred until the booking endpoint is implemented in Phase 3.
+- [x] Verify vehicle belongs to authenticated customer through an ownership policy.
+- [x] Scope appointment access to the authenticated customer through an ownership policy.
+- [ ] Protect appointment detail endpoint. — Deferred until the endpoint is implemented in Phase 6.
+- [ ] Protect cancellation endpoint. — Deferred until the endpoint is implemented in Phase 6.
+- [ ] Return endpoint-specific unauthorized/forbidden/not-found responses. — Deferred to the API/error-contract phases where those endpoints exist.
+
+### Policies
+
+Implement ownership policies without introducing appointment endpoints:
+
+- [x] `VehiclePolicy` verifies that the authenticated Customer owns the Vehicle.
+- [x] `AppointmentPolicy` verifies that the authenticated Customer owns the Appointment.
+- [x] `AppointmentPolicy` provides the ownership check used by future detail and cancellation operations.
+- [x] Ownership checks use the authenticated Customer identity and do not trust a client-supplied `customer_id`.
 
 ### Testing
 
-- [ ] Unauthenticated request rejected.
-- [ ] Authenticated customer can access own data.
-- [ ] Customer cannot book another customer's vehicle.
-- [ ] Customer cannot view another customer's appointment.
-- [ ] Customer cannot cancel another customer's appointment.
-- [ ] `customer_id` supplied by client is ignored/rejected according to request contract.
+Implemented and verified tests:
+
+- [x] Unauthenticated customer API request is rejected by `auth:sanctum`.
+- [x] Authenticated customer is resolved from the Sanctum user context.
+- [x] Authenticated customer can access their own Vehicle through `VehiclePolicy`.
+- [x] Customer cannot access another customer's Vehicle through `VehiclePolicy`.
+- [x] Authenticated customer can view and cancel their own Appointment through `AppointmentPolicy`.
+- [x] Customer cannot view or cancel another customer's Appointment through `AppointmentPolicy`.
+- [ ] Customer cannot book another customer's vehicle through an appointment endpoint. — Deferred until the booking endpoint is implemented in Phase 3.
+- [ ] `customer_id` supplied by client is ignored/rejected according to request contract. — Deferred until the booking request contract is implemented in Phase 3.
+
+### Verification
+
+Phase 2 implementation was tested and confirmed working.
+
+- [x] Run `php artisan migrate:fresh --seed`.
+- [x] Run `php artisan test`.
+- [x] Verify migration rollback/re-migration if migrations are changed. — N/A; Phase 2 changed no migrations.
 
 ### Exit criteria
 
-Every customer-facing appointment operation is correctly scoped to the authenticated customer.
+Authentication and reusable ownership policies are in place. Customer-facing appointment endpoint enforcement remains deferred until the corresponding endpoints are implemented in later phases.
 
 ---
 
