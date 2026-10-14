@@ -235,22 +235,23 @@ Those values are derived by the application.
 
 ## Current Implementation Status
 
-> Updated after Phase 0, Phase 1, and Phase 2 were completed and verified.
+> Updated after Phase 0, Phase 1, Phase 2, and Phase 3 were completed and verified.
 
 ### Overall
 
-- **Current phase:** Phase 3 — ServiceType & Core Booking Domain
+- **Current phase:** Phase 4 — Transaction & Concurrency Protection
 - **Phase 0 status:** ✅ Done
 - **Phase 1 status:** ✅ Done
 - **Phase 2 status:** ✅ Done
-- **Next phase:** Phase 3 — ServiceType & Core Booking Domain.
+- **Phase 3 status:** ✅ Done
+- **Next phase:** Phase 4 — Transaction & Concurrency Protection
 
 ### Phase status
 
 - [x] **Phase 0 — Project Baseline** — Done
 - [x] **Phase 1 — Domain Models & Database** — Done
 - [x] **Phase 2 — Authentication & Ownership** — Done
-- [ ] **Phase 3 — ServiceType & Core Booking Domain** — Not started
+- [x] **Phase 3 — ServiceType & Core Booking Domain** — Done
 - [ ] **Phase 4 — Transaction & Concurrency Protection** — Not started
 - [ ] **Phase 5 — Idempotency** — Not started
 - [ ] **Phase 6 — API Resources & Endpoints** — Not started
@@ -487,13 +488,23 @@ Authentication and reusable ownership policies are in place. Customer-facing app
 
 Implement the basic booking flow without concurrency hardening yet.
 
+### Status
+
+✅ **Done.** Phase 3 was implemented and the full test suite was verified successfully.
+
+### Verification
+
+- [x] Run `php artisan migrate:fresh --seed`.
+- [x] Run `php artisan test`.
+- [x] Verify Phase 3 booking, validation, resource selection, and overlap tests pass.
+
 ### ServiceType
 
-- [ ] Create ServiceType model.
-- [ ] Add `duration`.
-- [ ] Add active/inactive status.
-- [ ] Validate positive duration.
-- [ ] Do not add capability/qualification pivots.
+- [x] Create ServiceType model.
+- [x] Add `duration`.
+- [x] Add active/inactive status.
+- [x] Validate positive duration during booking.
+- [x] Do not add capability/qualification pivots.
 
 ### Services
 
@@ -512,50 +523,50 @@ AppointmentService
 
 Responsible for:
 
-- [ ] Finding vehicle.
-- [ ] Verifying vehicle is active.
-- [ ] Verifying vehicle ownership.
+- [x] Finding vehicle.
+- [x] Verifying vehicle status is `available`.
+- [x] Verifying vehicle ownership.
 
 ### DealershipService
 
 Responsible for:
 
-- [ ] Finding dealership.
-- [ ] Verifying dealership is active.
+- [x] Finding dealership.
+- [x] Verifying dealership is active.
 
 ### ServiceTypeService
 
 Responsible for:
 
-- [ ] Finding ServiceType.
-- [ ] Verifying ServiceType is active.
-- [ ] Verifying valid positive duration.
+- [x] Finding ServiceType.
+- [x] Verifying ServiceType is active.
+- [x] Verifying valid positive duration.
 
 ### TechnicianService
 
 Responsible for:
 
-- [ ] Finding active technicians for dealership.
-- [ ] Applying overlap rules.
-- [ ] Selecting available technician.
-- [ ] Deterministic ordering.
+- [x] Finding active technicians for dealership.
+- [x] Applying overlap rules.
+- [x] Selecting available technician.
+- [x] Deterministic ordering.
 
 ### ServiceBayService
 
 Responsible for:
 
-- [ ] Finding active bays for dealership.
-- [ ] Applying overlap rules.
-- [ ] Selecting available bay.
-- [ ] Deterministic ordering.
+- [x] Finding active bays for dealership.
+- [x] Applying overlap rules.
+- [x] Selecting available bay.
+- [x] Deterministic ordering.
 
 ### AppointmentService
 
 Responsible for:
 
-- [ ] Creating appointment.
-- [ ] Loading appointment.
-- [ ] Cancellation state transition.
+- [x] Creating appointment.
+- [x] Loading appointment.
+- [x] Cancellation state transition.
 
 ### AppointmentBookingService
 
@@ -575,58 +586,58 @@ Back-to-back appointments must be allowed.
 
 ### Checklist
 
-- [ ] Implement DTOs.
-- [ ] Implement FormRequest.
-- [ ] Implement CreateAppointmentAction.
-- [ ] Implement AppointmentBookingService.
-- [ ] Implement smaller services.
-- [ ] Calculate `end_at` from ServiceType duration.
-- [ ] Find technician.
-- [ ] Find service bay.
-- [ ] Create appointment.
-- [ ] Use `confirmed` status.
-- [ ] Exclude cancelled appointments from blocking.
-- [ ] Exclude soft-deleted resources.
-- [ ] Add `POST /api/v1/appointments`.
+- [x] Implement DTOs.
+- [x] Implement FormRequest.
+- [x] Implement CreateAppointmentAction.
+- [x] Implement AppointmentBookingService.
+- [x] Implement smaller services.
+- [x] Calculate `end_at` from ServiceType duration.
+- [x] Find technician.
+- [x] Find service bay.
+- [x] Create appointment.
+- [x] Use `confirmed` status.
+- [x] Exclude cancelled appointments from blocking.
+- [x] Exclude soft-deleted resources.
+- [x] Add `POST /api/v1/appointments`.
 
 ### Testing
 
 #### Happy path
 
-- [ ] Valid booking succeeds.
-- [ ] Correct customer is assigned.
-- [ ] Correct vehicle is assigned.
-- [ ] Correct dealership is assigned.
-- [ ] Correct ServiceType is assigned.
-- [ ] Technician is assigned.
-- [ ] Service Bay is assigned.
-- [ ] `end_at` is calculated from duration.
-- [ ] Appointment status is `confirmed`.
+- [x] Valid booking succeeds.
+- [x] Correct customer is assigned.
+- [x] Correct vehicle is assigned.
+- [x] Correct dealership is assigned.
+- [x] Correct ServiceType is assigned.
+- [x] Technician is assigned.
+- [x] Service Bay is assigned.
+- [x] `end_at` is calculated from duration.
+- [x] Appointment status is `confirmed`.
 
 #### Validation
 
-- [ ] Unknown vehicle.
-- [ ] Inactive vehicle.
-- [ ] Vehicle owned by another customer.
-- [ ] Unknown dealership.
-- [ ] Inactive dealership.
-- [ ] Unknown ServiceType.
-- [ ] Inactive ServiceType.
-- [ ] Invalid duration.
-- [ ] Invalid/missing start time.
-- [ ] Client-supplied `end_at` cannot override server calculation.
+- [x] Unknown vehicle.
+- [x] Inactive vehicle.
+- [x] Vehicle owned by another customer.
+- [x] Unknown dealership.
+- [x] Inactive dealership.
+- [x] Unknown ServiceType.
+- [x] Inactive ServiceType.
+- [x] Invalid duration.
+- [x] Invalid/missing start time.
+- [x] Client-supplied `end_at` cannot override server calculation.
 
 #### Overlap
 
 For both Technician and Service Bay:
 
-- [ ] Exact overlap rejected.
-- [ ] Requested start inside existing appointment rejected.
-- [ ] Requested end inside existing appointment rejected.
-- [ ] Existing appointment completely inside requested period rejected.
-- [ ] Requested appointment completely inside existing period rejected.
-- [ ] Back-to-back before existing appointment allowed.
-- [ ] Back-to-back after existing appointment allowed.
+- [x] Exact overlap rejected.
+- [x] Requested start inside existing appointment rejected.
+- [x] Requested end inside existing appointment rejected.
+- [x] Existing appointment completely inside requested period rejected.
+- [x] Requested appointment completely inside existing period rejected.
+- [x] Back-to-back before existing appointment allowed.
+- [x] Back-to-back after existing appointment allowed.
 
 ### Exit criteria
 
