@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify Docker
+        run: |
+          docker --version
+          docker compose version || true
+
+      - name: Create .env from .env.example
+        run: |
+          if [ -f .env.example ]; then
+            cp .env.example .env
+            echo ".env created from .env.example"
+          else
+            echo ".env.example not found"
+            exit 1
+          fi
+
+      - name: Build — docker compose up
+        run: |
+          set -e
+          # If your compose file is at the repo root this will work.
+          docker compose up -d --build
+          # wait for containers to show "Up" (max ~120s)
+          for i in {1..60}; do
+            if docker compose ps | grep -q 'Up'; then
+              echo "Containers are up"
+              break
+            fi
+            echo "Waiting for containers... ($i)"
+            sleep 2
+          done
+
+      - name: Wait for app container to be ready
+        run: |
+          set -e
+          # Poll artisan until it responds (max ~120s)
+          for i in {1..60}; do
+            if docker compose exec -T app php artisan --version >/dev/null 2>&1; then
+              echo "App container ready"
+              break
+            fi
+            echo "Waiting for app container... ($i)"
+            sleep 2
+          done
+
+      - name: Run migrations & seed
+        run: |
+          set -e
+          docker compose exec -T app php artisan migrate --force
+          docker compose exec -T app php artisan db:seed --force || true
+
+      - name: Run tests
+        run: |
+          set -e
+          docker compose exec -T app php artisan test --no-interaction
+
+      - name: Save docker-compose logs on failure
+        if: failure()
+        run: |
+          docker compose logs --no-color > compose-logs.txt || true
+          echo "==== docker-compose logs ===="
+          cat compose-logs.txt
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker compose down -v
