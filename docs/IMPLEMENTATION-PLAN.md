@@ -262,7 +262,8 @@ Those values are derived by the application.
 - **Phase 3 status:** ✅ Done
 - **Phase 4 status:** ✅ Done
 - **Phase 5 status:** ✅ Done
-- **Next phase:** Phase 6 — API Resources & Endpoints
+- **Phase 6 status:** ✅ Done
+- **Next phase:** Phase 7 — Error Handling & API Contract
 
 ### Phase status
 
@@ -272,7 +273,7 @@ Those values are derived by the application.
 - [x] **Phase 3 — ServiceType & Core Booking Domain** — Done
 - [x] **Phase 4 — Transaction & Concurrency Protection** — Done
 - [x] **Phase 5 — Idempotency** — Done
-- [ ] **Phase 6 — API Resources & Endpoints** — Not started
+- [x] **Phase 6 — API Resources & Endpoints** — Done
 - [ ] **Phase 7 — Error Handling & API Contract** — Not started
 - [ ] **Phase 8 — Complete Automated Test Suite** — Not started
 - [ ] **Phase 9 — Production Hardening** — Not started
@@ -816,6 +817,10 @@ Client retries cannot accidentally create duplicate appointments, successful ret
 
 Complete the customer-facing appointment API.
 
+## Status
+
+✅ **Done.** Phase 6 was implemented and verified successfully.
+
 ## API endpoints
 
 ```http
@@ -827,39 +832,27 @@ POST /api/v1/appointments/{appointment}/cancel
 
 ## AppointmentResource
 
-All API responses must use Laravel API Resources.
+All API responses use Laravel API Resources.
 
-Never return raw Eloquent models.
+No appointment endpoint returns raw Eloquent models.
 
-Expose:
-
-```text
-id
-status
-start_at
-end_at
-vehicle
-dealership
-service_type
-technician
-service_bay
-```
+Exposed fields are: `id`, `status`, `start_at`, `end_at`, `vehicle`, `dealership`, `service_type`, `technician`, and `service_bay`.
 
 ### List
 
-Rules:
+Rules implemented:
 
-- [ ] Pagination enabled.
-- [ ] Default `per_page = 20`.
-- [ ] Maximum `per_page = 100`.
-- [ ] Client can control `page`.
-- [ ] Client can control `per_page`.
-- [ ] Default ordering `start_at DESC`.
-- [ ] No arbitrary client sorting.
-- [ ] Filter by `status`.
-- [ ] Filter by `vehicle_id`.
-- [ ] Cancelled appointments remain visible.
-- [ ] Always scope to authenticated customer.
+- [x] Pagination enabled.
+- [x] Default `per_page = 20`.
+- [x] Maximum `per_page = 100`.
+- [x] Client can control `page`.
+- [x] Client can control `per_page`.
+- [x] Default ordering `start_at DESC`.
+- [x] No arbitrary client sorting.
+- [x] Filter by `status`.
+- [x] Filter by `vehicle_id`.
+- [x] Cancelled appointments remain visible.
+- [x] Always scope to authenticated customer.
 
 ### Cancellation
 
@@ -875,55 +868,60 @@ Allowed transition:
 confirmed -> cancelled
 ```
 
-Rules:
+Rules implemented:
 
-- [ ] Customer must own appointment.
-- [ ] Appointment must not have started.
-- [ ] Already cancelled cannot be cancelled again.
-- [ ] No minimum cancellation notice.
-- [ ] Rebooking creates a new appointment.
-- [ ] Cancelled appointment does not block resources.
-- [ ] Cancellation uses transaction.
-- [ ] Cancellation uses appropriate dealership locking.
-- [ ] Success returns `200`.
-- [ ] Response uses AppointmentResource.
+- [x] Customer must own appointment.
+- [x] Appointment must not have started.
+- [x] Already cancelled cannot be cancelled again.
+- [x] No minimum cancellation notice.
+- [x] Rebooking creates a new appointment.
+- [x] Cancelled appointment does not block resources.
+- [x] Cancellation uses transaction.
+- [x] Cancellation uses appropriate dealership locking.
+- [x] Success returns `200`.
+- [x] Response uses AppointmentResource.
 
 ### Testing
 
 #### API response
 
-- [ ] `201` for new booking.
-- [ ] `200` for idempotent retry.
-- [ ] `200` for cancellation.
-- [ ] Correct resource JSON structure.
-- [ ] No internal fields exposed.
-- [ ] Related resource summaries are correct.
+- [x] `201` for new booking.
+- [x] `200` for idempotent retry.
+- [x] `200` for cancellation.
+- [x] Correct resource JSON structure.
+- [x] No internal fields exposed.
+- [x] Related resource summaries are correct.
 
 #### List
 
-- [ ] Customer only sees own appointments.
-- [ ] Pagination default is 20.
-- [ ] Maximum page size is 100.
-- [ ] `status` filter works.
-- [ ] `vehicle_id` filter works.
-- [ ] Ordering is `start_at DESC`.
-- [ ] Cancelled appointments remain visible.
+- [x] Customer only sees own appointments.
+- [x] Pagination default is 20.
+- [x] Maximum page size is 100.
+- [x] `status` filter works.
+- [x] `vehicle_id` filter works.
+- [x] Ordering is `start_at DESC`.
+- [x] Cancelled appointments remain visible.
 
 #### Cancellation
 
-- [ ] Confirmed appointment can be cancelled.
-- [ ] Started appointment cannot be cancelled.
-- [ ] Already cancelled appointment cannot be cancelled.
-- [ ] Other customer's appointment cannot be cancelled.
-- [ ] Cancelled appointment no longer blocks resources.
-- [ ] Correct `409 APPOINTMENT_CANNOT_BE_CANCELLED` response.
+- [x] Confirmed appointment can be cancelled.
+- [x] Started appointment cannot be cancelled.
+- [x] Already cancelled appointment cannot be cancelled.
+- [x] Other customer's appointment cannot be cancelled.
+- [x] Cancelled appointment no longer blocks resources.
+- [x] Correct `409 APPOINTMENT_CANNOT_BE_CANCELLED` response.
+
+### Verification
+
+- [x] Run `php artisan migrate:fresh --seed`.
+- [x] Run `php artisan test`.
+- [x] Confirm the Phase 6 lifecycle tests pass.
 
 ### Exit criteria
 
 The complete appointment lifecycle is available through the API.
 
 ---
-
 # Phase 7 — Error Handling & API Contract
 
 ## Goal

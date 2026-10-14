@@ -45,13 +45,24 @@ test('creates a confirmed appointment with server-derived end time and resources
     ]);
 
     $response->assertCreated()
-        ->assertJsonPath('data.customer_id', $fixture['customer']->id)
-        ->assertJsonPath('data.vehicle_id', $fixture['vehicle']->id)
-        ->assertJsonPath('data.dealership_id', $fixture['dealership']->id)
-        ->assertJsonPath('data.service_type_id', $fixture['serviceType']->id)
-        ->assertJsonPath('data.technician_id', $fixture['technician']->id)
-        ->assertJsonPath('data.service_bay_id', $fixture['serviceBay']->id)
-        ->assertJsonPath('data.status', 'confirmed');
+        ->assertJsonPath('data.id', Appointment::query()->firstOrFail()->id)
+        ->assertJsonPath('data.status', 'confirmed')
+        ->assertJsonPath('data.vehicle.id', $fixture['vehicle']->id)
+        ->assertJsonPath('data.vehicle.name', $fixture['vehicle']->name)
+        ->assertJsonPath('data.dealership.id', $fixture['dealership']->id)
+        ->assertJsonPath('data.dealership.name', $fixture['dealership']->name)
+        ->assertJsonPath('data.service_type.id', $fixture['serviceType']->id)
+        ->assertJsonPath('data.service_type.name', $fixture['serviceType']->name)
+        ->assertJsonPath('data.technician.id', $fixture['technician']->id)
+        ->assertJsonPath('data.technician.name', $fixture['technician']->name)
+        ->assertJsonPath('data.service_bay.id', $fixture['serviceBay']->id)
+        ->assertJsonPath('data.service_bay.name', $fixture['serviceBay']->name)
+        ->assertJsonMissingPath('data.customer_id')
+        ->assertJsonMissingPath('data.vehicle_id')
+        ->assertJsonMissingPath('data.dealership_id')
+        ->assertJsonMissingPath('data.service_type_id')
+        ->assertJsonMissingPath('data.technician_id')
+        ->assertJsonMissingPath('data.service_bay_id');
 
     $appointment = Appointment::query()->firstOrFail();
     expect($appointment->start_at->utc()->format('Y-m-d H:i:s'))->toBe('2026-11-01 03:00:00')

@@ -66,6 +66,21 @@ final class RedisAvailabilityService
         }
     }
 
+    public function removeAppointmentIndex(
+        string $appointmentId,
+        string $technicianId,
+        string $serviceBayId,
+    ): void {
+        try {
+            $redis = Redis::connection();
+            $redis->zrem("booking:availability:technician:{$technicianId}", $appointmentId);
+            $redis->zrem("booking:availability:service-bay:{$serviceBayId}", $appointmentId);
+            $redis->del("booking:availability:appointment:{$appointmentId}");
+        } catch (Throwable) {
+            // Redis is advisory. A failed index update must never invalidate a committed cancellation.
+        }
+    }
+
     private function candidateIds(
         string $resourceKey,
         string $resourcePrefix,
@@ -86,7 +101,6 @@ final class RedisAvailabilityService
 
                 $this->warmExistingAppointments($resources, $resourcePrefix);
             } else {
-                // Keep the Redis resource index aligned with current active resources.
                 foreach ($activeResourceIds as $resourceId) {
                     $redis->sadd($resourceKey, $resourceId);
                 }
@@ -123,7 +137,6 @@ final class RedisAvailabilityService
 
             return $candidates;
         } catch (Throwable) {
-            // Redis unavailable: return null so the DB-only authoritative path continues.
             return null;
         }
     }

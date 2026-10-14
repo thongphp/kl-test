@@ -15,5 +15,11 @@ Route::prefix('v1')->group(function () {
     Route::middleware('auth:sanctum')->group(function () {
         Route::post('/appointments', [AppointmentController::class, 'store'])
             ->name('api.v1.appointments.store');
+        Route::get('/appointments', [AppointmentController::class, 'index'])
+            ->name('api.v1.appointments.index');
+        Route::get('/appointments/{appointment}', [AppointmentController::class, 'show'])
+            ->name('api.v1.appointments.show');
+        Route::post('/appointments/{appointment}/cancel', [AppointmentController::class, 'cancel'])
+            ->name('api.v1.appointments.cancel');
     });
 });
