@@ -26,7 +26,7 @@ services:
       POSTGRES_USER: kl_user
       POSTGRES_PASSWORD: secret
     volumes:
-      - db_data:/var/lib/postgresql/data
+      - db_data:/var/lib/postgresql
     ports:
       - '5432:5432'
     healthcheck:
@@ -54,6 +54,8 @@ services:
 
 volumes:
   db_data:
+    driver: local
+    name: db_data
   redis_data:
 
 networks:
