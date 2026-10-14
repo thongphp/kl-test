@@ -312,3 +312,79 @@ it('applies the half-open overlap rule for the requested interval', function (st
     'back-to-back before existing' => ['2026-11-01T11:00:00+07:00', '2026-11-01T12:00:00+07:00', 201],
     'back-to-back after existing' => ['2026-11-01T09:00:00+07:00', '2026-11-01T10:00:00+07:00', 201],
 ]);
+
+test('rolls back appointment creation when persistence fails after resource selection', function () {
+    $fixture = bookingFixture();
+
+    $appointmentService = Mockery::mock(\App\Services\AppointmentService::class);
+    $appointmentService->shouldReceive('create')
+        ->once()
+        ->andThrow(new RuntimeException('simulated persistence failure'));
+
+    $this->app->instance(\App\Services\AppointmentService::class, $appointmentService);
+    $this->withoutExceptionHandling();
+
+    expect(fn () => $this->postJson('/api/v1/appointments', [
+        'vehicle_id' => $fixture['vehicle']->id,
+        'dealership_id' => $fixture['dealership']->id,
+        'service_type_id' => $fixture['serviceType']->id,
+        'start_at' => '2026-11-01T10:00:00+07:00',
+    ]))->toThrow(RuntimeException::class);
+
+    expect(Appointment::query()->count())->toBe(0);
+});
+
+test('maps Redis dealership lock contention to booking in progress conflict', function () {
+    $fixture = bookingFixture();
+
+    $lockService = Mockery::mock(\App\Services\RedisBookingLockService::class);
+    $lockService->shouldReceive('acquire')
+        ->once()
+        ->with($fixture['dealership']->id)
+        ->andThrow(new \App\Exceptions\BookingInProgressException());
+
+    $this->app->instance(\App\Services\RedisBookingLockService::class, $lockService);
+
+    $this->postJson('/api/v1/appointments', [
+        'vehicle_id' => $fixture['vehicle']->id,
+        'dealership_id' => $fixture['dealership']->id,
+        'service_type_id' => $fixture['serviceType']->id,
+        'start_at' => '2026-11-01T10:00:00+07:00',
+    ])->assertStatus(409)
+        ->assertJsonPath('code', 'BOOKING_IN_PROGRESS');
+
+    expect(Appointment::query()->count())->toBe(0);
+});
+
+
+test('falls back to the database when Redis availability is unavailable', function () {
+    $fixture = bookingFixture();
+
+    $lockService = Mockery::mock(\App\Services\RedisBookingLockService::class);
+    $lockService->shouldReceive('acquire')
+        ->once()
+        ->with($fixture['dealership']->id)
+        ->andReturn(null);
+
+    $availabilityService = Mockery::mock(\App\Services\RedisAvailabilityService::class);
+    $availabilityService->shouldReceive('candidateTechnicianIds')
+        ->once()
+        ->andReturn(null);
+    $availabilityService->shouldReceive('candidateServiceBayIds')
+        ->once()
+        ->andReturn(null);
+    $availabilityService->shouldReceive('indexAppointment')
+        ->once();
+
+    $this->app->instance(\App\Services\RedisBookingLockService::class, $lockService);
+    $this->app->instance(\App\Services\RedisAvailabilityService::class, $availabilityService);
+
+    $this->postJson('/api/v1/appointments', [
+        'vehicle_id' => $fixture['vehicle']->id,
+        'dealership_id' => $fixture['dealership']->id,
+        'service_type_id' => $fixture['serviceType']->id,
+        'start_at' => '2026-11-01T10:00:00+07:00',
+    ])->assertCreated();
+
+    expect(Appointment::query()->count())->toBe(1);
+});

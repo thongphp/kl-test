@@ -2,24 +2,34 @@
 
 ## 1. Context
 
-Keyloop is a Laravel-based MVP for managing customers, vehicles, service bays, qualified employees, and appointments.
+Keyloop is a Laravel-based MVP for customer vehicle service appointments.
 
-The MVP is API-first and is intended to provide a clean foundation for future business workflows such as vehicle test drives and appointment scheduling.
+The MVP provides an API-first booking flow where an authenticated customer selects a vehicle, dealership, service type, and desired start time. The application derives the service duration and selects one available Technician and one available Service Bay.
 
-The application is currently designed as a single Laravel application with a REST API, relational persistence through Eloquent, Redis for caching, and OpenAPI documentation.
+The domain is intentionally simple:
+
+- `ServiceType` is independent.
+- `ServiceType` owns duration.
+- All active ServiceTypes are available at all active Dealerships.
+- All active Technicians and Service Bays at a Dealership can perform all active ServiceTypes.
+- No capability/qualification matrices are modeled in the MVP.
+
+The main technical challenge is safe resource allocation under concurrency.
 
 ## 2. Goals
 
-- Provide a REST API for the MVP domain.
-- Support customer authentication.
-- Keep business logic outside controllers.
-- Separate application actions from domain/service logic.
-- Use immutable DTOs at Action/Service boundaries.
-- Use UUIDs as model identifiers.
-- Use SoftDeletes for domain models.
-- Provide API documentation through OpenAPI/Swagger-compatible documentation.
-- Maintain high automated-test coverage for Actions and Services.
-- Keep the architecture simple enough for an MVP while allowing future growth.
+- Provide a REST API for appointment booking.
+- Authenticate customers with Laravel Sanctum.
+- Keep controllers thin.
+- Keep business logic in Actions and focused Services.
+- Use immutable DTOs at application boundaries.
+- Use UUID identifiers.
+- Use SoftDeletes where appropriate.
+- Calculate appointment duration server-side.
+- Prevent overlapping Technician and Service Bay reservations.
+- Make booking atomic.
+- Use Redis as a first-layer coordination/advisory mechanism while keeping the database authoritative.
+- Maintain strong automated test coverage.
 
 ## 3. Current Tech Stack
 
@@ -29,20 +39,18 @@ The application is currently designed as a single Laravel application with a RES
 | Framework | Laravel 13.x |
 | API | Laravel REST API |
 | Authentication | Laravel Sanctum |
-| Database | SQLite |
-| Cache | Redis |
+| Database | SQLite for development/tests |
+| Production database | PostgreSQL or MySQL |
+| Cache/coordination | Redis |
 | API documentation | Dedoc Scramble / OpenAPI |
 | Testing | Pest 4 / PHPUnit 12 |
 | ORM | Laravel Eloquent |
 | Identifiers | UUID |
 | Deletion strategy | SoftDeletes |
 | Dependency management | Composer |
+| Test-only final-class mocking | `nunomaduro/mock-final-classes` |
 
-Composer targets PHP `^8.5`, meaning PHP 8.5 or newer within the PHP 8.x-compatible Composer constraint.
-
-## 4. Architecture
-
-The application follows a layered application architecture:
+## 4. High-Level Architecture
 
 ```text
 HTTP Request
@@ -50,320 +58,486 @@ HTTP Request
     v
 Controller
     |
-    +--> FormRequest
+    v
+FormRequest
     |
     v
 Action
     |
     v
-Service
+AppointmentBookingService
+    |
+    +--> CustomerService
+    +--> DealershipService
+    +--> ServiceTypeService
+    +--> TechnicianService
+    +--> ServiceBayService
+    +--> AppointmentService
+    +--> RedisBookingLockService
+    +--> RedisAvailabilityService
     |
     v
-Eloquent Model
+Eloquent Models
     |
     v
 Database
-```
 
 Supporting infrastructure:
-
-```text
-                    +----------------+
-                    |   REST API     |
-                    +-------+--------+
-                            |
-                       Controllers
-                            |
-                         Actions
-                            |
-                         Services
-                       /          \
-                      /            \
-                Eloquent          Redis
-                   |
-                SQLite
+    Redis
 ```
 
 ### Controller
 
-Controllers are intentionally thin.
+Controllers are HTTP orchestration only.
 
-Responsibilities:
+They must not contain:
 
-- Receive HTTP requests.
-- Inject FormRequests for validation.
-- Inject Actions.
-- Convert validated request data into Action input/DTOs.
-- Return API responses.
-
-Controllers should not contain business rules or direct database queries.
+- booking rules;
+- availability logic;
+- overlap logic;
+- resource selection;
+- transaction logic;
+- Redis coordination.
 
 ### FormRequest
 
-FormRequests own HTTP input validation and authorization concerns.
+FormRequests own HTTP validation and authorization.
 
-They should validate request-specific input before an Action is executed.
+The booking request accepts only customer-controlled input:
+
+```text
+vehicle_id
+dealership_id
+service_type_id
+start_at
+```
+
+The client cannot provide:
+
+```text
+customer_id
+technician_id
+service_bay_id
+end_at
+```
 
 ### Action
 
-Actions represent application-level use cases.
+`CreateAppointmentAction` represents the booking use case.
 
-Examples:
+It receives validated input, constructs `CreateAppointmentData`, and delegates to `AppointmentBookingService`.
 
-- Login a customer.
-- Create an appointment.
-- Assign a qualified employee.
+### AppointmentBookingService
 
-Actions receive validated input and coordinate Services.
+This is the booking orchestration service and owns the transaction boundary.
 
-Actions should not directly query the database.
+It coordinates:
 
-### Service
+- customer/vehicle validation;
+- dealership validation;
+- ServiceType validation;
+- duration calculation;
+- Redis lock;
+- Redis availability candidates;
+- authoritative DB resource checks;
+- appointment creation;
+- post-commit Redis indexing.
 
-Services contain reusable business/domain logic.
-
-Services are the only application-layer components, apart from Eloquent Models themselves, that should interact with the persistence layer.
-
-Services may:
-
-- Query Eloquent models.
-- Create/update/delete models.
-- Apply business rules.
-- Interact with infrastructure such as cache where appropriate.
-
-### DTO
-
-DTOs provide explicit boundaries between Services and Actions.
-
-DTOs should be immutable and represent structured application data rather than HTTP-specific request objects.
-
-## 5. Domain Model
-
-The current MVP contains these core entities:
-
-### Customer
-
-Represents a customer who can authenticate with email/password.
-
-Key information:
-
-- UUID
-- First name
-- Last name
-- Email
-- Password
-- Timestamps
-- Soft deletion
-
-### Vehicle
-
-Represents a vehicle associated with a customer.
-
-Key information includes:
-
-- UUID
-- Name
-- Brand
-- Color
-- Unique PIN
-- Vehicle type
-- Timestamps
-- Soft deletion
-
-### Service Bay
-
-Represents a physical/service location where an appointment can take place.
-
-Key information:
-
-- UUID
-- Name
-- Location
-- Timestamps
-- Soft deletion
-
-### Qualified Employee
-
-Represents an employee qualified to perform a service.
-
-Key information:
-
-- UUID
-- Name
-- Unique EIN
-- Timestamps
-- Soft deletion
-
-### Appointment
-
-Represents a scheduled service interaction.
-
-It connects:
-
-- Customer
-- Vehicle
-- Service Bay
-- Qualified Employee
-
-It also contains:
-
-- Start time
-- End time
-- Service type
-
-Example service type:
-
-- `test-drive`
-
-## 6. Authentication
-
-Customer authentication is provided through Laravel Sanctum.
-
-Current endpoint:
+## 5. Booking Flow and Concurrency Protection
 
 ```text
-POST /api/auth/login
+Booking Request
+      |
+      v
+Redis dealership lock
+booking:dealership:{dealership_id}
+      |
+      v
+DB transaction
+      |
+      +--> lock dealership row
+      |
+      +--> validate customer / vehicle
+      |
+      +--> validate dealership
+      |
+      +--> validate ServiceType
+      |
+      +--> calculate end_at
+      |
+      +--> consult Redis availability index
+      |
+      +--> authoritative DB overlap checks
+      |
+      +--> select Technician
+      |
+      +--> select Service Bay
+      |
+      +--> create Appointment
+      |
+      v
+COMMIT
+      |
+      v
+Update Redis availability index
+      |
+      v
+Release Redis lock
 ```
 
-Example request:
+### Why two layers?
 
-```json
-{
-  "email": "customer@example.com",
-  "password": "password"
-}
-```
+Redis provides fast coordination and candidate filtering.
 
-Successful response:
+The database provides the authoritative booking decision.
 
-```json
-{
-  "data": {
-    "customer": {
-      "id": "UUID",
-      "first_name": "John",
-      "last_name": "Doe",
-      "email": "customer@example.com"
-    },
-    "token": "sanctum-token"
-  }
-}
-```
-
-Authentication responsibilities are separated as follows:
+Therefore:
 
 ```text
-AuthController
-    |
-LoginCustomerRequest
-    |
-LoginCustomerAction
-    |
-CustomerAuthenticationService
-    |
+Redis = first layer
+Database = final authority
+```
+
+A Redis result can never replace the database overlap check.
+
+## 6. Redis Booking Lock
+
+The lock key is:
+
+```text
+booking:dealership:{dealership_id}
+```
+
+The lock is intentionally scoped to the dealership.
+
+It does not include customer ID.
+
+This means:
+
+```text
+Dealership A booking -> Dealership A lock
+Dealership B booking -> Dealership B lock
+```
+
+Bookings at different dealerships do not unnecessarily block one another.
+
+If the lock cannot be acquired because another booking currently holds it:
+
+```text
+409 BOOKING_IN_PROGRESS
+```
+
+If Redis itself is unavailable, the booking continues through the authoritative database locking path.
+
+Redis lock failure does not make Redis authoritative.
+
+## 7. Redis Availability Index
+
+Redis maintains advisory availability information for Technicians, Service Bays, and appointments.
+
+Conceptual keys:
+
+```text
+booking:availability:dealership:{dealership_id}:technicians
+booking:availability:dealership:{dealership_id}:service-bays
+booking:availability:technician:{technician_id}
+booking:availability:service-bay:{service_bay_id}
+booking:availability:appointment:{appointment_id}
+```
+
+The index is used to produce candidate resource IDs.
+
+The authoritative resource services still query the database to apply:
+
+```text
+existing.start_at < requested.end_at
+AND
+existing.end_at > requested.start_at
+```
+
+Redis is updated only after a successful database commit.
+
+If Redis indexing fails after commit, the appointment remains valid because the database already established the authoritative state.
+
+## 8. Database Transaction
+
+The booking transaction contains the complete authoritative operation:
+
+```text
+BEGIN
+
+Lock dealership row
+Validate customer and vehicle
+Validate dealership
+Validate ServiceType
+Calculate end_at
+Get Redis candidate resources
+Check authoritative DB availability
+Create Appointment
+
+COMMIT
+```
+
+On any exception:
+
+```text
+ROLLBACK
+```
+
+This guarantees that a failed booking cannot leave a partial Appointment.
+
+The dealership row lock is the authoritative serialization boundary for booking requests targeting the same dealership.
+
+## 9. Resource Selection
+
+`TechnicianService` and `ServiceBayService` have focused responsibilities.
+
+Both select only resources that:
+
+- belong to the requested dealership;
+- are active;
+- are not blocked by an overlapping confirmed appointment.
+
+Selection is deterministic, using ID ordering.
+
+The MVP does not model technician qualification or service-bay capability.
+
+## 10. Domain Model
+
+```text
 Customer
+    |
+    +---- Vehicle
+    |
+    +---- Appointment
+              |
+              +---- Dealership
+              |       |
+              |       +---- Technician
+              |       +---- ServiceBay
+              |
+              +---- ServiceType
 ```
 
-## 7. API Design
-
-API routes live under:
+Appointment stores:
 
 ```text
-routes/api.php
+customer_id
+vehicle_id
+dealership_id
+service_type_id
+technician_id
+service_bay_id
+start_at
+end_at
+status
 ```
 
-API responses should use a predictable JSON structure.
+`dealership_id` is stored explicitly even though Technician and ServiceBay also belong to a Dealership.
 
-Successful resource/use-case responses should generally expose data through a `data` property.
+## 11. Time and Overlap
 
-Validation errors should use Laravel's standard JSON validation response format.
+Service duration is owned by `ServiceType`:
 
-Authentication/authorization errors should use appropriate HTTP status codes.
+```text
+end_at = start_at + service_type.duration
+```
 
-## 8. Database
+Appointment intervals are half-open:
 
-SQLite is the current MVP database because it keeps local development and automated testing lightweight.
+```text
+[start_at, end_at)
+```
 
-Redis is the target cache backend.
+Back-to-back appointments are valid.
 
-All domain models should use:
+Example:
 
-- UUID primary keys.
-- Timestamps.
-- SoftDeletes.
+```text
+Existing:   09:00 -------- 10:00
+Requested:              10:00 -------- 11:00
+```
 
-Relationships should be represented using Eloquent relationships rather than manually constructed SQL.
+Conflict rule:
 
-Database access belongs behind the Service boundary.
+```text
+existing.start_at < requested.end_at
+AND
+existing.end_at > requested.start_at
+```
 
-## 9. Caching
+API timestamps use ISO-8601 with an explicit offset and appointment times are stored in UTC.
 
-Redis is used as the cache backend.
+## 12. Authentication and Ownership
 
-Caching should be introduced only where it provides a clear performance or consistency benefit.
+Laravel Sanctum authenticates customers.
 
-Services should own cache-related business decisions rather than controllers.
+The authenticated user determines customer identity.
 
-Cache invalidation must be considered whenever cached domain data is mutated.
+Customers may:
 
-## 10. API Documentation
+- create appointments only for their own vehicles;
+- list only their own appointments;
+- retrieve only their own appointments;
+- cancel only their own appointments.
 
-OpenAPI documentation is provided through Dedoc Scramble.
+The client never supplies `customer_id` as an authoritative value.
 
-All public API endpoints should be documented.
+## 13. API
 
-Documentation should describe:
+Booking:
 
-- HTTP method.
-- URI.
-- Authentication requirements.
-- Request parameters/body.
-- Validation rules.
-- Response structure.
-- HTTP status codes.
-- Error responses.
+```http
+POST /api/v1/appointments
+```
 
-## 11. Testing Strategy
+Future/next-phase customer endpoints:
 
-Testing uses Pest 4 with PHPUnit 12 underneath.
+```http
+GET /api/v1/appointments
+GET /api/v1/appointments/{appointment}
+POST /api/v1/appointments/{appointment}/cancel
+```
 
-### Unit tests
+Responses use Laravel API Resources.
 
-Actions and Services should have comprehensive unit coverage.
+## 14. Error Semantics
 
-Target:
+Relevant booking conflicts include:
 
-- Actions: 100%
-- Services: 100%
+```text
+409 NO_RESOURCE_AVAILABLE
+409 BOOKING_IN_PROGRESS
+```
 
-### Integration / Feature tests
+Validation/business input failures use:
 
-API endpoints should be tested through HTTP requests.
+```text
+422
+```
 
-Important scenarios include:
+The API must not expose internal resource availability details.
 
-- Successful authentication.
-- Invalid credentials.
-- Validation failures.
-- Authentication/authorization failures.
-- Successful domain operations.
-- Domain-level business-rule failures.
+## 15. Idempotency
 
-Tests should use an isolated database state.
+Idempotency is a separate phase.
 
-## 12. Project Structure
+The booking endpoint will support:
 
-Important application directories:
+```text
+Idempotency-Key
+```
+
+with 24-hour retention.
+
+The idempotency mechanism must integrate with the existing booking transaction and concurrency model.
+
+## 16. Testing Strategy
+
+Feature tests exercise the HTTP booking workflow.
+
+Phase 4 specifically verifies:
+
+- transaction rollback after persistence failure;
+- no partial booking state;
+- Redis lock contention;
+- `BOOKING_IN_PROGRESS`;
+- Redis availability fallback to DB;
+- post-commit Redis indexing;
+- existing overlap behavior.
+
+The test environment uses:
+
+```text
+Pest 4
+PHPUnit 12
+nunomaduro/mock-final-classes
+```
+
+The final-class mocking package is development-only and does not participate in production runtime behavior.
+
+Explicit multi-process concurrency/race testing remains part of the later complete test and production-hardening work.
+
+## 17. Database
+
+Development/test database:
+
+```text
+SQLite
+```
+
+Production database:
+
+```text
+PostgreSQL or MySQL
+```
+
+Recommended appointment indexes:
+
+```text
+appointments(technician_id, start_at, end_at)
+appointments(service_bay_id, start_at, end_at)
+```
+
+The booking implementation must not rely on SQLite-specific locking behavior.
+
+## 18. Redis Failure Model
+
+Redis is supporting infrastructure.
+
+### Redis available
+
+Use:
+
+```text
+Redis lock
+    +
+Redis availability candidates
+    +
+DB authoritative check
+```
+
+### Redis unavailable
+
+Use:
+
+```text
+DB lock
+    +
+DB authoritative availability check
+```
+
+### Redis disagrees with DB
+
+Use:
+
+```text
+DB result
+```
+
+The database always wins.
+
+## 19. Project Structure
 
 ```text
 app/
 ├── Actions/
 ├── DTOs/
+├── Exceptions/
 ├── Http/
 │   ├── Controllers/
 │   └── Requests/
 ├── Models/
 └── Services/
+    ├── CustomerService.php
+    ├── DealershipService.php
+    ├── ServiceTypeService.php
+    ├── TechnicianService.php
+    ├── ServiceBayService.php
+    ├── AppointmentService.php
+    ├── AppointmentBookingService.php
+    ├── RedisBookingLockService.php
+    └── RedisAvailabilityService.php
 
 routes/
 └── api.php
@@ -373,73 +547,78 @@ tests/
 └── Unit/
 
 docs/
-└── SYSTEM-DESIGN.md
+├── SYSTEM-DESIGN.md
+├── mvp-tech-final.md
+└── plan.md
 ```
 
-The exact directory structure may grow as additional use cases are introduced.
-
-## 13. Development Principles
+## 20. Development Principles
 
 1. Keep controllers thin.
 2. Validate HTTP input in FormRequests.
 3. Put application use cases in Actions.
-4. Put reusable business logic in Services.
-5. Keep database interaction behind the Service boundary.
-6. Use immutable DTOs between application layers.
-7. Prefer Eloquent relationships over raw SQL.
-8. Keep API contracts stable and documented.
-9. Write tests with the use case in mind.
-10. Avoid adding abstractions without a concrete reason.
+4. Put reusable business logic in focused Services.
+5. Keep the complete booking transaction in `AppointmentBookingService`.
+6. Use the database as the authoritative source of truth.
+7. Use Redis only as a first-layer lock/index.
+8. Never trust Redis availability as final truth.
+9. Use immutable DTOs at application boundaries.
+10. Prefer Eloquent relationships over raw SQL.
+11. Keep API contracts stable and documented.
+12. Avoid abstractions without a concrete reason.
+13. Add automated tests for new business rules.
 
-## 14. Current MVP Status
+## 21. Current MVP Status
 
-Implemented foundation:
+Completed:
 
-- Laravel 13.x application.
-- PHP 8.5 Composer target.
-- Customer model and authentication flow.
-- Sanctum token authentication.
-- Vehicle model.
-- Service Bay model.
-- Qualified Employee model.
-- Appointment model.
-- UUID-based domain models.
-- SoftDeletes.
-- Action/Service/DTO structure.
-- API routes.
-- OpenAPI documentation dependency.
-- Pest 4 testing setup.
-- Feature and unit test structure.
+- Project baseline.
+- Domain models and migrations.
+- Sanctum authentication and ownership.
+- ServiceType and core booking domain.
+- Appointment resource selection.
+- Server-derived appointment duration.
+- Half-open overlap handling.
+- Database transaction boundary.
+- Dealership-level Redis booking lock.
+- Database dealership row locking.
+- Redis advisory availability index.
+- Redis failure fallback.
+- Post-commit Redis index update.
+- Phase 4 rollback and contention tests.
 
-## 15. Known Limitations / Follow-up Work
+Next:
 
-The following areas should be reviewed as development continues:
+- Phase 5 — Idempotency.
+- Phase 6 — API Resources, list/detail, and cancellation.
+- Phase 7 — Error handling and API contract.
+- Phase 8 — Complete automated test suite.
+- Phase 9 — Production hardening.
 
-- Complete API coverage for all domain entities.
-- Complete authorization rules.
-- Add factories and seeders for all domain models.
-- Expand appointment business rules.
-- Define and enforce appointment conflict rules.
-- Add Redis-backed caching where useful.
-- Review Sanctum token lifecycle/revocation.
-- Ensure every model participating in the application follows the UUID and SoftDeletes conventions.
-- Generate and verify the OpenAPI documentation.
-- Add CI for PHP 8.5 and automated tests.
-- Keep `composer.lock` synchronized with the Composer manifest after dependency installation/update.
-
-## 16. Architectural Direction
-
-The MVP should remain a modular Laravel monolith unless scale or team boundaries justify introducing separate services.
-
-Future modules can be added using the same pattern:
+## 22. Architectural Decision Summary
 
 ```text
-Controller
-    -> FormRequest
-    -> Action
-    -> DTO
-    -> Service
-    -> Eloquent Model
+Simple domain
+    +
+Focused Services
+    +
+Immutable DTOs
+    +
+Redis first-layer coordination
+    +
+Authoritative database transaction
+    +
+Dealership database locking
+    +
+Correct overlap detection
+    +
+Idempotency
+    +
+Strong automated tests
 ```
 
-This keeps the API layer independent from business rules while retaining Laravel's productivity and ecosystem.
+The objective is not to build a generalized scheduling platform.
+
+The objective is to reliably answer:
+
+> Can this customer book this vehicle at this dealership for this ServiceType at this time, and can the system reserve exactly one available Technician and one available Service Bay without double booking them?

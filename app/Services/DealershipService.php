@@ -21,4 +21,22 @@ final class DealershipService
 
         return $dealership;
     }
+
+    public function lockActive(string $dealershipId): Dealership
+    {
+        $dealership = Dealership::withTrashed()
+            ->whereKey($dealershipId)
+            ->lockForUpdate()
+            ->first();
+
+        if ($dealership === null) {
+            throw ValidationException::withMessages(['dealership_id' => 'The selected dealership does not exist.']);
+        }
+
+        if ($dealership->trashed() || ! $dealership->active) {
+            throw ValidationException::withMessages(['dealership_id' => 'The selected dealership is unavailable.']);
+        }
+
+        return $dealership;
+    }
 }

@@ -37,8 +37,14 @@ These decisions should not be changed during implementation without explicitly r
 - Cancellation: explicit `/cancel` endpoint
 - Public availability endpoint: not included
 - Database: authoritative source of truth
-- Redis: optional supporting infrastructure, never authoritative
+- Redis: first-layer advisory availability index and dealership booking lock; never authoritative
+- Redis availability check: first layer before authoritative DB availability selection
+- Redis booking lock: `booking:dealership:{dealership_id}`
+- Redis lock does not include customer ID
+- Redis unavailable: fall back to authoritative DB path
+- Redis lock contention: `409 BOOKING_IN_PROGRESS`
 - DB transaction: required for booking
+- DB dealership row lock: authoritative serialization boundary
 - Idempotency: `Idempotency-Key`, retained for 24 hours
 - New booking: `201 Created`
 - Idempotent retry: `200 OK`
@@ -235,16 +241,17 @@ Those values are derived by the application.
 
 ## Current Implementation Status
 
-> Updated after Phase 0, Phase 1, Phase 2, and Phase 3 were completed and verified.
+> Updated after Phase 0, Phase 1, Phase 2, Phase 3, and Phase 4 were completed and verified.
 
 ### Overall
 
-- **Current phase:** Phase 4 — Transaction & Concurrency Protection
+- **Current phase:** Phase 5 — Idempotency
 - **Phase 0 status:** ✅ Done
 - **Phase 1 status:** ✅ Done
 - **Phase 2 status:** ✅ Done
 - **Phase 3 status:** ✅ Done
-- **Next phase:** Phase 4 — Transaction & Concurrency Protection
+- **Phase 4 status:** ✅ Done
+- **Next phase:** Phase 5 — Idempotency
 
 ### Phase status
 
@@ -252,7 +259,7 @@ Those values are derived by the application.
 - [x] **Phase 1 — Domain Models & Database** — Done
 - [x] **Phase 2 — Authentication & Ownership** — Done
 - [x] **Phase 3 — ServiceType & Core Booking Domain** — Done
-- [ ] **Phase 4 — Transaction & Concurrency Protection** — Not started
+- [x] **Phase 4 — Transaction & Concurrency Protection** — Done
 - [ ] **Phase 5 — Idempotency** — Not started
 - [ ] **Phase 6 — API Resources & Endpoints** — Not started
 - [ ] **Phase 7 — Error Handling & API Contract** — Not started
@@ -649,23 +656,58 @@ A valid request creates one complete appointment with server-derived duration an
 
 ## Goal
 
-Make booking safe under concurrent requests.
+Make booking safe under concurrent requests while keeping the database as the authoritative source of truth.
 
-This is the most important technical phase.
+### Status
+
+✅ **Done.** Phase 4 was implemented and the complete local test suite was run successfully.
+
+### Agreed booking protection flow
+
+The booking path now uses Redis as the first layer and the database as the final authority:
+
+```text
+Booking Request
+      |
+      v
+1. Redis dealership lock
+   booking:dealership:{dealership_id}
+      |
+      v
+2. Database transaction
+   - lock dealership row
+   - validate customer / vehicle
+   - validate ServiceType
+   - calculate end_at
+   - Redis availability index lookup
+   - authoritative DB availability check
+   - create Appointment
+      |
+      v
+   COMMIT
+      |
+      v
+3. Update Redis availability index
+```
+
+Redis is an optimization/coordination layer only. A Redis result must never be treated as proof that a resource is available.
 
 ### Transaction boundary
 
-The entire booking operation must execute inside one database transaction:
+The entire authoritative booking operation executes inside one database transaction:
 
 ```text
 BEGIN
 
+Lock dealership row
 Validate ownership
 Validate dealership
 Validate ServiceType
 Calculate end_at
-Find technician
-Find service bay
+Check Redis availability candidates
+Check authoritative DB availability
+Select technician
+Select service bay
 Create appointment
 
 COMMIT
@@ -677,17 +719,11 @@ Any failure:
 ROLLBACK
 ```
 
-### Database authority
+No partial appointment state may remain.
 
-The database remains authoritative.
+### Redis dealership lock
 
-Do not use Redis as the source of truth.
-
-### Locking
-
-Implement appropriate database transaction/locking semantics for the production database.
-
-If Redis locking is implemented:
+The lock key is:
 
 ```text
 booking:dealership:{dealership_id}
@@ -695,34 +731,92 @@ booking:dealership:{dealership_id}
 
 Rules:
 
-- [ ] Redis lock does not become authoritative.
-- [ ] Redis failure falls back to database behavior where supported by the implementation.
-- [ ] Database wins if Redis and DB disagree.
-- [ ] Lock failure maps to `409 BOOKING_IN_PROGRESS`.
+- [x] Lock is dealership-scoped.
+- [x] Customer ID is not part of the lock key.
+- [x] Different dealerships do not unnecessarily block each other.
+- [x] Lock contention maps to `409 BOOKING_IN_PROGRESS`.
+- [x] Redis lock is never authoritative.
+- [x] Redis lock failure/unavailability falls back to the database locking path where applicable.
 
-### Checklist
+### Redis availability index
 
-- [ ] Move transaction ownership into AppointmentBookingService.
-- [ ] Ensure all booking steps are inside the transaction.
-- [ ] Add appropriate database locking.
-- [ ] Ensure resource selection and appointment creation are protected.
-- [ ] Prevent same resource from being reserved twice.
-- [ ] Handle lock/contention failures.
-- [ ] Ensure rollback removes all partial state.
+Redis maintains an advisory availability index for technicians and service bays.
+
+The booking service:
+
+1. Consults Redis availability information first.
+2. Uses Redis to produce candidate resource IDs.
+3. Performs the final overlap check through the authoritative database query.
+4. Creates the appointment only after the database confirms the resource is available.
+5. Updates Redis only after the database transaction commits successfully.
+
+If Redis is unavailable, the service returns to the database-only authoritative path.
+
+### Database authority
+
+The database remains authoritative for:
+
+- resource ownership;
+- resource active state;
+- appointment status;
+- appointment overlap;
+- appointment creation;
+- transaction rollback/commit.
+
+If Redis and the database disagree, the database wins.
+
+### Implementation
+
+Implemented:
+
+- [x] Move transaction ownership into `AppointmentBookingService`.
+- [x] Add dealership-level Redis booking lock.
+- [x] Add authoritative database dealership row locking.
+- [x] Add Redis technician availability index.
+- [x] Add Redis service-bay availability index.
+- [x] Use Redis as an advisory candidate filter only.
+- [x] Keep final resource overlap checks in `TechnicianService` and `ServiceBayService`.
+- [x] Update Redis availability indexes only after a successful DB commit.
+- [x] Release the Redis lock after the booking attempt.
+- [x] Fall back to DB behavior when Redis is unavailable.
+- [x] Map Redis lock contention to `BOOKING_IN_PROGRESS`.
 
 ### Testing
 
-- [ ] No technician → no appointment.
-- [ ] No service bay → no appointment.
-- [ ] Failure during appointment creation → no partial state.
-- [ ] Failure after resource lookup → transaction rollback.
-- [ ] Concurrent bookings cannot reserve the same technician and bay for overlapping periods.
-- [ ] Back-to-back concurrent bookings behave correctly.
-- [ ] Database remains authoritative.
+Implemented and verified:
+
+- [x] Failure during appointment persistence rolls back the transaction.
+- [x] Failure after resource selection leaves no appointment.
+- [x] Redis dealership lock contention returns `409 BOOKING_IN_PROGRESS`.
+- [x] Redis availability unavailability falls back to the database.
+- [x] Successful booking updates the Redis availability index after commit.
+- [x] Existing overlap rules continue to protect resources.
+- [x] Full local test suite passes.
+
+Explicit multi-process race/concurrency stress testing remains part of the later complete concurrency/production verification work; Phase 4 provides the locking and transaction mechanisms required for that testing.
+
+### Test dependency
+
+The test suite uses:
+
+```text
+nunomaduro/mock-final-classes
+```
+
+as a development-only dependency so final service classes can be mocked in Phase 4 tests without changing production code solely for testability.
 
 ### Exit criteria
 
-Concurrent booking attempts cannot produce overlapping reservations for the same resource.
+Phase 4 is complete when:
+
+- the booking transaction is atomic;
+- dealership-level Redis locking is implemented;
+- database dealership locking is authoritative;
+- Redis availability is advisory only;
+- Redis failures do not prevent the authoritative DB fallback;
+- lock contention returns `409 BOOKING_IN_PROGRESS`;
+- no partial appointment remains after a transaction failure;
+- the full local test suite passes.
 
 ---
 
@@ -1291,7 +1385,7 @@ During implementation, follow these rules:
 5. **Do not put booking logic in controllers.**
 6. **Do not put the complete booking transaction inside individual sub-services.**
 7. **The transaction belongs to `AppointmentBookingService`.**
-8. **Do not use Redis as the authoritative booking source.**
+8. **Use Redis only as the first-layer advisory availability/locking mechanism; the database remains authoritative.**
 9. **Do not return raw Eloquent models from API endpoints.**
 10. **Do not silently introduce future-domain requirements.**
 11. **Keep DTOs focused on service/action boundaries.**
