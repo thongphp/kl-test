@@ -57,7 +57,7 @@ jobs:
 
       - name: Run tests
         run: |
-          docker compose exec -T app php artisan test --no-interaction
+          docker compose exec -T app php artisan test
 
       - name: Save docker-compose logs on failure
         if: failure()
