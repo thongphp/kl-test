@@ -11,6 +11,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Cache the vendor directory based on the composer.lock file
+      - name: Cache Composer dependencies
+        uses: actions/cache@v4
+        with:
+          path: vendor
+          key: ${{ runner.os }}-composer-${{ hashFiles('**/composer.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-composer-
+
       - name: Verify Docker
         run: |
           docker --version
