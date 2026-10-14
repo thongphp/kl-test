@@ -235,28 +235,27 @@ Those values are derived by the application.
 
 ## Current Implementation Status
 
-> Updated after the Phase 0 work prepared for `kl-test`.
+> Updated after Phase 0 was merged to `main` and the full test suite passed, and after preparing the Phase 1 implementation changes.
 
 ### Overall
 
-- **Current phase:** Phase 0 — Project Baseline
-- **Phase 0 status:** 🟡 In progress
-- **Completed in this update:** API v1 routing, API health endpoint/test, and customer-login route/test migration to `/api/v1`.
-- **Not yet verified:** Laravel/Composer baseline, application boot, database/migrations, full Pest suite, UUID/soft-delete conventions, and coding/namespace conventions.
-- **Next phase:** Phase 1 — Domain Models & Database, after Phase 0 exit criteria are satisfied.
+- **Current phase:** Phase 1 — Domain Models & Database
+- **Phase 0 status:** ✅ Done
+- **Phase 1 status:** 🟡 In progress — implementation prepared; local migration/re-migration and full test verification are still pending.
+- **Next phase:** Phase 2 — Authentication & Ownership, after Phase 1 exit criteria are verified and merged.
 
 ### Phase status
 
-- [ ] **Phase 0 — Project Baseline** — In progress
-- [ ] **Phase 1 — Domain Models & Database** — Not started
+- [x] **Phase 0 — Project Baseline** — Done
+- [ ] **Phase 1 — Domain Models & Database** — In progress
 - [ ] **Phase 2 — Authentication & Ownership** — Not started
 - [ ] **Phase 3 — ServiceType & Core Booking Domain** — Not started
-- [ ] **Phase 4 — Resource Availability & Concurrency** — Not started
+- [ ] **Phase 4 — Transaction & Concurrency Protection** — Not started
 - [ ] **Phase 5 — Idempotency** — Not started
 - [ ] **Phase 6 — API Resources & Endpoints** — Not started
 - [ ] **Phase 7 — Error Handling & API Contract** — Not started
-- [ ] **Phase 8 — Testing & Hardening** — Not started
-- [ ] **Phase 9 — Documentation & Delivery** — Not started
+- [ ] **Phase 8 — Complete Automated Test Suite** — Not started
+- [ ] **Phase 9 — Production Hardening** — Not started
 
 ---
 
@@ -266,33 +265,33 @@ Those values are derived by the application.
 
 Ensure the Laravel project is stable before implementing business logic.
 
-### Current status
+### Status
 
-🟡 **In progress.** The API versioning convention and health endpoint are implemented, and the existing customer login test has been migrated to `/api/v1`. The remaining baseline verification items must still be completed before Phase 0 can be marked done.
+✅ **Done.** Phase 0 was merged to `main`, and the full test suite passed locally.
 
 ### Checklist
 
-- [ ] Verify Laravel installation.
-- [ ] Verify Composer configuration.
-- [ ] Verify application boots successfully.
-- [ ] Configure `.env`.
-- [ ] Configure database connection.
-- [ ] Verify migrations run.
-- [ ] Configure Pest.
-- [ ] Verify the existing test suite passes.
+- [x] Verify Laravel installation.
+- [x] Verify Composer configuration.
+- [x] Verify application boots successfully.
+- [x] Configure `.env`.
+- [x] Configure database connection.
+- [x] Verify migrations run.
+- [x] Configure Pest.
+- [x] Verify the existing test suite passes.
 - [x] Configure API routing.
 - [x] Establish `/api/v1` route convention.
-- [ ] Establish UUID convention.
-- [ ] Establish soft-delete convention.
-- [ ] Establish coding/namespace conventions.
+- [x] Establish UUID convention.
+- [x] Establish soft-delete convention.
+- [x] Establish coding/namespace conventions.
 
 ### Testing
 
-- [ ] Application boot test.
-- [ ] Database connection test.
-- [ ] Migration test.
+- [x] Application boot test.
+- [x] Database connection test.
+- [x] Migration test.
 - [x] Basic API health test.
-- [ ] Baseline Pest suite passes.
+- [x] Baseline Pest suite passes.
 
 ### Exit criteria
 
@@ -310,14 +309,14 @@ Create the MVP domain model and database structure.
 
 Implement:
 
-- [ ] Customer
-- [ ] Vehicle
-- [ ] Dealership
-- [ ] Technician
-- [ ] ServiceBay
-- [ ] ServiceType
-- [ ] Appointment
-- [ ] IdempotencyKey
+- [x] Customer
+- [x] Vehicle
+- [x] Dealership
+- [x] Technician
+- [x] ServiceBay
+- [x] ServiceType
+- [x] Appointment
+- [x] IdempotencyKey
 
 ### Migrations
 
@@ -383,14 +382,14 @@ Appointment
 
 ### Checklist
 
-- [ ] Create migrations.
-- [ ] Create models.
-- [ ] Configure UUIDs.
-- [ ] Configure casts.
-- [ ] Configure soft deletes.
-- [ ] Configure relationships.
-- [ ] Add factories.
-- [ ] Add seeders for development.
+- [x] Create migrations.
+- [x] Create models.
+- [x] Configure UUIDs.
+- [x] Configure casts.
+- [x] Configure soft deletes.
+- [x] Configure relationships.
+- [x] Add factories.
+- [x] Add seeders for development.
 - [ ] Run migrations from clean database.
 - [ ] Run rollback/re-migration.
 - [ ] Verify indexes.
@@ -403,6 +402,15 @@ Appointment
 - [ ] Soft-deleted resources are excluded from normal queries.
 - [ ] Factory data is valid.
 - [ ] Clean migration/re-migration succeeds.
+
+### Verification pending
+
+The following must be confirmed locally after applying the Phase 1 ZIP:
+
+- [ ] Run migrations from a clean database.
+- [ ] Run rollback/re-migration.
+- [ ] Verify indexes.
+- [ ] Run the complete Pest suite and confirm all Phase 1 tests pass.
 
 ### Exit criteria
 

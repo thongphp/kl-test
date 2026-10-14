@@ -13,17 +13,9 @@ class Customer extends Authenticatable
 {
     use HasApiTokens, HasFactory, HasUuids, Notifiable, SoftDeletes;
 
-    protected $fillable = [
-        'email',
-        'password',
-        'first_name',
-        'last_name',
-    ];
+    protected $fillable = ['email', 'password', 'first_name', 'last_name'];
 
-    protected $hidden = [
-        'password',
-        'remember_token',
-    ];
+    protected $hidden = ['password', 'remember_token'];
 
     protected $casts = [
         'email_verified_at' => 'datetime',
@@ -33,4 +25,7 @@ class Customer extends Authenticatable
     protected $keyType = 'string';
 
     public $incrementing = false;
+
+    public function vehicles() { return $this->hasMany(Vehicle::class); }
+    public function appointments() { return $this->hasMany(Appointment::class); }
 }

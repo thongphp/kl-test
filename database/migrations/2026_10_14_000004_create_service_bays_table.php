@@ -5,15 +5,23 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration {
-    public function up(): void {
+    public function up(): void
+    {
         Schema::create('service_bays', function (Blueprint $table) {
             $table->uuid('id')->primary();
+            $table->foreignUuid('dealership_id')->constrained('dealerships')->cascadeOnUpdate()->restrictOnDelete();
             $table->string('name');
-            $table->string('location');
+            $table->string('location')->nullable();
+            $table->boolean('active')->default(true);
             $table->timestamps();
             $table->softDeletes();
+
+            $table->index(['dealership_id', 'active']);
         });
     }
 
-    public function down(): void { Schema::dropIfExists('service_bays'); }
+    public function down(): void
+    {
+        Schema::dropIfExists('service_bays');
+    }
 };
