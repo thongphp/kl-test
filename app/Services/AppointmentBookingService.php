@@ -2,9 +2,9 @@
 
 namespace App\Services;
 
+use App\DTOs\Appointment\AppointmentBookingResult;
 use App\DTOs\Appointment\CreateAppointmentData;
 use App\Exceptions\ResourceConflictException;
-use App\Models\Appointment;
 use App\Models\Customer;
 use Illuminate\Support\Facades\DB;
 use Throwable;
@@ -20,23 +20,40 @@ final class AppointmentBookingService
         private readonly AppointmentService $appointmentService,
         private readonly RedisBookingLockService $redisBookingLockService,
         private readonly RedisAvailabilityService $redisAvailabilityService,
+        private readonly IdempotencyService $idempotencyService,
     ) {}
 
-    public function book(CreateAppointmentData $data): Appointment
+    public function book(CreateAppointmentData $data, ?string $idempotencyKey = null): AppointmentBookingResult
     {
+        $fingerprint = $this->idempotencyService->fingerprint($data);
         $lock = $this->redisBookingLockService->acquire($data->dealershipId);
 
         try {
-            $appointment = DB::transaction(function () use ($data) {
-                // Serializes bookings for the dealership in the authoritative database.
+            $result = DB::transaction(function () use ($data, $idempotencyKey, $fingerprint): AppointmentBookingResult {
                 $dealership = $this->dealershipService->lockActive($data->dealershipId);
+
                 $customer = Customer::query()->findOrFail($data->customerId);
+                $idempotency = null;
+
+                if ($idempotencyKey !== null && $idempotencyKey !== '') {
+                    $idempotency = $this->idempotencyService->begin(
+                        customerId: $customer->getKey(),
+                        key: $idempotencyKey,
+                        fingerprint: $fingerprint,
+                    );
+
+                    if ($idempotency['replay']) {
+                        return new AppointmentBookingResult(
+                            appointment: $this->idempotencyService->appointment($idempotency['record']),
+                            replayed: true,
+                        );
+                    }
+                }
+
                 $vehicle = $this->customerService->findVehicleForBooking($customer, $data->vehicleId);
                 $serviceType = $this->serviceTypeService->findActive($data->serviceTypeId);
                 $endAt = $data->startAt->addMinutes($serviceType->duration);
 
-                // Redis is consulted first as an advisory availability index. Its answer never
-                // replaces the authoritative DB overlap check below.
                 $technicianIds = $this->redisAvailabilityService->candidateTechnicianIds(
                     $dealership,
                     $data->startAt,
@@ -75,20 +92,36 @@ final class AppointmentBookingService
                     endAt: $endAt,
                 );
 
-                return $appointment;
+                // Return the persisted representation so the initial response matches
+                // the representation returned by an idempotent replay.
+                $appointment->refresh();
+
+                if ($idempotency !== null) {
+                    $this->idempotencyService->complete($idempotency['record'], $appointment);
+                }
+
+                return new AppointmentBookingResult(
+                    appointment: $appointment,
+                    replayed: false,
+                );
             });
 
-            // Update Redis only after the DB transaction commits successfully.
-            $this->redisAvailabilityService->indexAppointment(
-                appointmentId: $appointment->getKey(),
-                technicianId: $appointment->technician_id,
-                serviceBayId: $appointment->service_bay_id,
-                dealershipId: $appointment->dealership_id,
-                startAt: $appointment->start_at,
-                endAt: $appointment->end_at,
-            );
+            if (! $result->replayed) {
+                try {
+                    $this->redisAvailabilityService->indexAppointment(
+                        appointmentId: $result->appointment->getKey(),
+                        technicianId: $result->appointment->technician_id,
+                        serviceBayId: $result->appointment->service_bay_id,
+                        dealershipId: $result->appointment->dealership_id,
+                        startAt: $result->appointment->start_at,
+                        endAt: $result->appointment->end_at,
+                    );
+                } catch (Throwable) {
+                    // The DB transaction and idempotency record are already committed.
+                }
+            }
 
-            return $appointment;
+            return $result;
         } finally {
             if ($lock !== null) {
                 try {

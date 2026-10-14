@@ -15,17 +15,21 @@ final class AppointmentController extends Controller
     {
         $customer = $request->user();
         $validated = $request->validated();
+        $idempotencyKey = trim((string) $request->header('Idempotency-Key'));
 
-        $appointment = $action->execute(new CreateAppointmentData(
-            customerId: $customer->getKey(),
-            vehicleId: $validated['vehicle_id'],
-            dealershipId: $validated['dealership_id'],
-            serviceTypeId: $validated['service_type_id'],
-            startAt: CarbonImmutable::parse($validated['start_at'])->utc(),
-        ));
+        $result = $action->execute(
+            new CreateAppointmentData(
+                customerId: $customer->getKey(),
+                vehicleId: $validated['vehicle_id'],
+                dealershipId: $validated['dealership_id'],
+                serviceTypeId: $validated['service_type_id'],
+                startAt: CarbonImmutable::parse($validated['start_at'])->utc(),
+            ),
+            $idempotencyKey,
+        );
 
         return response()->json([
-            'data' => $appointment,
-        ], 201);
+            'data' => $result->appointment,
+        ], $result->responseStatus());
     }
 }

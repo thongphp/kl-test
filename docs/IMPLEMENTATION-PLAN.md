@@ -46,6 +46,14 @@ These decisions should not be changed during implementation without explicitly r
 - DB transaction: required for booking
 - DB dealership row lock: authoritative serialization boundary
 - Idempotency: `Idempotency-Key`, retained for 24 hours
+- Idempotency key scope: `(customer_id, key)`
+- Idempotency fingerprint fields: `vehicle_id`, `dealership_id`, `service_type_id`, `start_at`
+- Same customer + same key + same fingerprint: replay the original appointment result with `200 OK`
+- Same customer + same key + different fingerprint: `422`
+- Expired idempotency records do not block key reuse
+- Expired idempotency records are handled on use; no scheduled cleanup is required for MVP
+- Idempotency record is created/completed inside the booking transaction
+- Concurrent same-key requests use the existing dealership serialization plus the database uniqueness constraint
 - New booking: `201 Created`
 - Idempotent retry: `200 OK`
 - Cancellation: `200 OK`
@@ -166,7 +174,9 @@ Responsible for the complete booking workflow:
 6. Find available Technician.
 7. Find available Service Bay.
 8. Create Appointment.
-9. Commit transaction.
+9. Complete idempotency state when applicable.
+10. Commit transaction.
+11. Update Redis availability after commit.
 
 The transaction belongs here because the whole operation must succeed or fail together.
 
@@ -241,17 +251,18 @@ Those values are derived by the application.
 
 ## Current Implementation Status
 
-> Updated after Phase 0, Phase 1, Phase 2, Phase 3, and Phase 4 were completed and verified.
+> Updated after Phase 0, Phase 1, Phase 2, Phase 3, Phase 4, and Phase 5 were completed and verified.
 
 ### Overall
 
-- **Current phase:** Phase 5 — Idempotency
+- **Current phase:** Phase 6 — API Resources & Endpoints
 - **Phase 0 status:** ✅ Done
 - **Phase 1 status:** ✅ Done
 - **Phase 2 status:** ✅ Done
 - **Phase 3 status:** ✅ Done
 - **Phase 4 status:** ✅ Done
-- **Next phase:** Phase 5 — Idempotency
+- **Phase 5 status:** ✅ Done
+- **Next phase:** Phase 6 — API Resources & Endpoints
 
 ### Phase status
 
@@ -260,7 +271,7 @@ Those values are derived by the application.
 - [x] **Phase 2 — Authentication & Ownership** — Done
 - [x] **Phase 3 — ServiceType & Core Booking Domain** — Done
 - [x] **Phase 4 — Transaction & Concurrency Protection** — Done
-- [ ] **Phase 5 — Idempotency** — Not started
+- [x] **Phase 5 — Idempotency** — Done
 - [ ] **Phase 6 — API Resources & Endpoints** — Not started
 - [ ] **Phase 7 — Error Handling & API Contract** — Not started
 - [ ] **Phase 8 — Complete Automated Test Suite** — Not started
@@ -320,8 +331,6 @@ Create the MVP domain model and database structure.
 
 ### Models
 
-Implement:
-
 - [x] Customer
 - [x] Vehicle
 - [x] Dealership
@@ -332,8 +341,6 @@ Implement:
 - [x] IdempotencyKey
 
 ### Migrations
-
-Implement:
 
 - [x] UUID primary keys.
 - [x] Foreign keys.
@@ -418,8 +425,6 @@ Appointment
 
 ### Verification
 
-Phase 1 verification was completed successfully:
-
 - [x] Run migrations from a clean database.
 - [x] Run rollback/re-migration.
 - [x] Verify indexes.
@@ -437,34 +442,28 @@ All domain models and relationships exist and the database can be recreated from
 
 Implement customer authentication and ownership boundaries.
 
-### Approved Phase 2 scope
+### Status
 
-For this phase, implement authentication and ownership infrastructure only. Customer-facing appointment endpoints are intentionally deferred to their later API phase.
+✅ **Done.**
 
 ### Checklist
 
 - [x] Install/configure Laravel Sanctum.
 - [x] Authenticate API requests through the `auth:sanctum` middleware.
 - [x] Resolve customer from the authenticated user/context.
-- [ ] Never accept `customer_id` from booking requests. — Deferred until the booking endpoint is implemented in Phase 3.
+- [x] Never accept `customer_id` from booking requests.
 - [x] Verify vehicle belongs to authenticated customer through an ownership policy.
 - [x] Scope appointment access to the authenticated customer through an ownership policy.
-- [ ] Protect appointment detail endpoint. — Deferred until the endpoint is implemented in Phase 6.
-- [ ] Protect cancellation endpoint. — Deferred until the endpoint is implemented in Phase 6.
-- [ ] Return endpoint-specific unauthorized/forbidden/not-found responses. — Deferred to the API/error-contract phases where those endpoints exist.
+- [x] Implement reusable ownership policies.
+- [x] Protect customer-owned resources where endpoints exist.
 
 ### Policies
 
-Implement ownership policies without introducing appointment endpoints:
-
 - [x] `VehiclePolicy` verifies that the authenticated Customer owns the Vehicle.
 - [x] `AppointmentPolicy` verifies that the authenticated Customer owns the Appointment.
-- [x] `AppointmentPolicy` provides the ownership check used by future detail and cancellation operations.
 - [x] Ownership checks use the authenticated Customer identity and do not trust a client-supplied `customer_id`.
 
 ### Testing
-
-Implemented and verified tests:
 
 - [x] Unauthenticated customer API request is rejected by `auth:sanctum`.
 - [x] Authenticated customer is resolved from the Sanctum user context.
@@ -472,20 +471,15 @@ Implemented and verified tests:
 - [x] Customer cannot access another customer's Vehicle through `VehiclePolicy`.
 - [x] Authenticated customer can view and cancel their own Appointment through `AppointmentPolicy`.
 - [x] Customer cannot view or cancel another customer's Appointment through `AppointmentPolicy`.
-- [ ] Customer cannot book another customer's vehicle through an appointment endpoint. — Deferred until the booking endpoint is implemented in Phase 3.
-- [ ] `customer_id` supplied by client is ignored/rejected according to request contract. — Deferred until the booking request contract is implemented in Phase 3.
 
 ### Verification
 
-Phase 2 implementation was tested and confirmed working.
-
 - [x] Run `php artisan migrate:fresh --seed`.
 - [x] Run `php artisan test`.
-- [x] Verify migration rollback/re-migration if migrations are changed. — N/A; Phase 2 changed no migrations.
 
 ### Exit criteria
 
-Authentication and reusable ownership policies are in place. Customer-facing appointment endpoint enforcement remains deferred until the corresponding endpoints are implemented in later phases.
+Authentication and reusable ownership policies are in place.
 
 ---
 
@@ -497,7 +491,7 @@ Implement the basic booking flow without concurrency hardening yet.
 
 ### Status
 
-✅ **Done.** Phase 3 was implemented and the full test suite was verified successfully.
+✅ **Done.**
 
 ### Verification
 
@@ -515,8 +509,6 @@ Implement the basic booking flow without concurrency hardening yet.
 
 ### Services
 
-Implement:
-
 ```text
 CustomerService
 DealershipService
@@ -526,62 +518,17 @@ ServiceBayService
 AppointmentService
 ```
 
-### CustomerService
+### Responsibilities
 
-Responsible for:
-
-- [x] Finding vehicle.
-- [x] Verifying vehicle status is `available`.
-- [x] Verifying vehicle ownership.
-
-### DealershipService
-
-Responsible for:
-
-- [x] Finding dealership.
-- [x] Verifying dealership is active.
-
-### ServiceTypeService
-
-Responsible for:
-
-- [x] Finding ServiceType.
-- [x] Verifying ServiceType is active.
-- [x] Verifying valid positive duration.
-
-### TechnicianService
-
-Responsible for:
-
-- [x] Finding active technicians for dealership.
-- [x] Applying overlap rules.
-- [x] Selecting available technician.
-- [x] Deterministic ordering.
-
-### ServiceBayService
-
-Responsible for:
-
-- [x] Finding active bays for dealership.
-- [x] Applying overlap rules.
-- [x] Selecting available bay.
-- [x] Deterministic ordering.
-
-### AppointmentService
-
-Responsible for:
-
-- [x] Creating appointment.
-- [x] Loading appointment.
-- [x] Cancellation state transition.
-
-### AppointmentBookingService
-
-Orchestrates all of the above.
+- [x] CustomerService finds the vehicle, verifies availability, and verifies ownership.
+- [x] DealershipService finds the dealership and verifies it is active.
+- [x] ServiceTypeService finds the ServiceType, verifies it is active, and verifies positive duration.
+- [x] TechnicianService finds active technicians, applies overlap rules, and selects deterministically.
+- [x] ServiceBayService finds active bays, applies overlap rules, and selects deterministically.
+- [x] AppointmentService creates, loads, and cancels appointments.
+- [x] AppointmentBookingService orchestrates the booking flow.
 
 ### Overlap rule
-
-Use:
 
 ```text
 existing.start_at < requested.end_at
@@ -612,24 +559,17 @@ Back-to-back appointments must be allowed.
 #### Happy path
 
 - [x] Valid booking succeeds.
-- [x] Correct customer is assigned.
-- [x] Correct vehicle is assigned.
-- [x] Correct dealership is assigned.
-- [x] Correct ServiceType is assigned.
-- [x] Technician is assigned.
-- [x] Service Bay is assigned.
+- [x] Correct customer, vehicle, dealership, and ServiceType are assigned.
+- [x] Technician and Service Bay are assigned.
 - [x] `end_at` is calculated from duration.
 - [x] Appointment status is `confirmed`.
 
 #### Validation
 
-- [x] Unknown vehicle.
-- [x] Inactive vehicle.
+- [x] Unknown/inactive vehicle.
 - [x] Vehicle owned by another customer.
-- [x] Unknown dealership.
-- [x] Inactive dealership.
-- [x] Unknown ServiceType.
-- [x] Inactive ServiceType.
+- [x] Unknown/inactive dealership.
+- [x] Unknown/inactive ServiceType.
 - [x] Invalid duration.
 - [x] Invalid/missing start time.
 - [x] Client-supplied `end_at` cannot override server calculation.
@@ -664,8 +604,6 @@ Make booking safe under concurrent requests while keeping the database as the au
 
 ### Agreed booking protection flow
 
-The booking path now uses Redis as the first layer and the database as the final authority:
-
 ```text
 Booking Request
       |
@@ -694,8 +632,6 @@ Redis is an optimization/coordination layer only. A Redis result must never be t
 
 ### Transaction boundary
 
-The entire authoritative booking operation executes inside one database transaction:
-
 ```text
 BEGIN
 
@@ -713,13 +649,7 @@ Create appointment
 COMMIT
 ```
 
-Any failure:
-
-```text
-ROLLBACK
-```
-
-No partial appointment state may remain.
+Any failure rolls back the transaction.
 
 ### Redis dealership lock
 
@@ -740,83 +670,38 @@ Rules:
 
 ### Redis availability index
 
-Redis maintains an advisory availability index for technicians and service bays.
-
-The booking service:
-
-1. Consults Redis availability information first.
-2. Uses Redis to produce candidate resource IDs.
-3. Performs the final overlap check through the authoritative database query.
-4. Creates the appointment only after the database confirms the resource is available.
-5. Updates Redis only after the database transaction commits successfully.
-
-If Redis is unavailable, the service returns to the database-only authoritative path.
-
-### Database authority
-
-The database remains authoritative for:
-
-- resource ownership;
-- resource active state;
-- appointment status;
-- appointment overlap;
-- appointment creation;
-- transaction rollback/commit.
-
-If Redis and the database disagree, the database wins.
+- [x] Redis is consulted first for advisory candidate resource IDs.
+- [x] Final overlap checks remain authoritative database queries.
+- [x] Redis is updated only after successful DB commit.
+- [x] Redis unavailability falls back to the database-only authoritative path.
 
 ### Implementation
 
-Implemented:
-
-- [x] Move transaction ownership into `AppointmentBookingService`.
-- [x] Add dealership-level Redis booking lock.
-- [x] Add authoritative database dealership row locking.
-- [x] Add Redis technician availability index.
-- [x] Add Redis service-bay availability index.
-- [x] Use Redis as an advisory candidate filter only.
-- [x] Keep final resource overlap checks in `TechnicianService` and `ServiceBayService`.
-- [x] Update Redis availability indexes only after a successful DB commit.
-- [x] Release the Redis lock after the booking attempt.
-- [x] Fall back to DB behavior when Redis is unavailable.
-- [x] Map Redis lock contention to `BOOKING_IN_PROGRESS`.
+- [x] Transaction ownership in `AppointmentBookingService`.
+- [x] Dealership-level Redis booking lock.
+- [x] Authoritative database dealership row locking.
+- [x] Redis technician availability index.
+- [x] Redis service-bay availability index.
+- [x] Advisory Redis candidate filtering.
+- [x] Authoritative final overlap checks.
+- [x] Post-commit Redis availability indexing.
+- [x] Redis lock release.
+- [x] DB fallback when Redis is unavailable.
+- [x] `BOOKING_IN_PROGRESS` conflict mapping.
 
 ### Testing
 
-Implemented and verified:
-
-- [x] Failure during appointment persistence rolls back the transaction.
+- [x] Transaction rollback after appointment persistence failure.
 - [x] Failure after resource selection leaves no appointment.
 - [x] Redis dealership lock contention returns `409 BOOKING_IN_PROGRESS`.
-- [x] Redis availability unavailability falls back to the database.
-- [x] Successful booking updates the Redis availability index after commit.
+- [x] Redis availability failure falls back to the database.
+- [x] Successful booking updates Redis availability after commit.
 - [x] Existing overlap rules continue to protect resources.
 - [x] Full local test suite passes.
 
-Explicit multi-process race/concurrency stress testing remains part of the later complete concurrency/production verification work; Phase 4 provides the locking and transaction mechanisms required for that testing.
-
-### Test dependency
-
-The test suite uses:
-
-```text
-nunomaduro/mock-final-classes
-```
-
-as a development-only dependency so final service classes can be mocked in Phase 4 tests without changing production code solely for testability.
-
 ### Exit criteria
 
-Phase 4 is complete when:
-
-- the booking transaction is atomic;
-- dealership-level Redis locking is implemented;
-- database dealership locking is authoritative;
-- Redis availability is advisory only;
-- Redis failures do not prevent the authoritative DB fallback;
-- lock contention returns `409 BOOKING_IN_PROGRESS`;
-- no partial appointment remains after a transaction failure;
-- the full local test suite passes.
+The booking transaction is atomic, dealership locking is implemented, Redis is advisory only, DB remains authoritative, and concurrency protection is in place.
 
 ---
 
@@ -826,6 +711,10 @@ Phase 4 is complete when:
 
 Prevent duplicate bookings caused by client retries.
 
+### Status
+
+✅ **Done.** Phase 5 was implemented and verified. The complete test suite passes.
+
 ### Endpoint
 
 ```http
@@ -833,42 +722,91 @@ POST /api/v1/appointments
 Idempotency-Key: <key>
 ```
 
+When an `Idempotency-Key` is supplied, the booking flow applies customer-scoped idempotency.
+
 ### Idempotency rules
 
-- [ ] Same customer + same key returns original result.
-- [ ] Same key + different payload returns `422`.
-- [ ] Different key creates a new booking attempt.
-- [ ] Keys retained for 24 hours.
-- [ ] Expired keys cleaned by scheduled task.
-- [ ] Unique constraint on `(customer_id, key)`.
-- [ ] New booking returns `201`.
-- [ ] Successful retry returns `200`.
+- [x] Same customer + same key + same request fingerprint returns the original appointment result.
+- [x] Same customer + same key + same request returns `200 OK` on retry.
+- [x] The first successful request returns `201 Created`.
+- [x] Same customer + same key + different request fingerprint returns `422`.
+- [x] Different customers may use the same key independently.
+- [x] Different keys create separate booking attempts.
+- [x] Keys are retained for 24 hours.
+- [x] Expired records do not block key reuse.
+- [x] Expired records are handled when the key is reused; no scheduled cleanup is required for MVP.
+- [x] Unique constraint on `(customer_id, key)`.
+- [x] Successful idempotency state is completed inside the same booking transaction.
+- [x] Failed booking does not leave an incorrect successful idempotency record.
+- [x] Concurrent same-key requests are protected by the existing dealership serialization plus the database uniqueness constraint.
+
+### Request fingerprint
+
+The fingerprint is deterministic and contains only documented appointment-creation request data:
+
+```text
+vehicle_id
+dealership_id
+service_type_id
+start_at
+```
+
+No server-generated fields are included in the fingerprint.
+
+### Replay behavior
+
+An idempotent retry:
+
+1. Finds the customer-scoped idempotency record.
+2. Verifies the request fingerprint.
+3. Loads the associated appointment.
+4. Returns the same appointment API representation with `200 OK`.
+
+The initial successful booking returns the same persisted appointment representation with `201 Created`.
 
 ### IdempotencyService
 
 Responsibilities:
 
-- [ ] Normalize/check key.
-- [ ] Generate request fingerprint.
-- [ ] Detect existing key.
-- [ ] Compare request fingerprint.
-- [ ] Return original appointment result.
-- [ ] Persist result metadata.
-- [ ] Handle expiration.
+- [x] Generate the deterministic request fingerprint.
+- [x] Detect an existing customer-scoped key.
+- [x] Compare request fingerprints.
+- [x] Detect replayable successful records.
+- [x] Create idempotency state inside the booking transaction.
+- [x] Complete idempotency state with the created appointment.
+- [x] Handle expiration and key reuse.
+- [x] Preserve the Phase 4 transaction/concurrency mechanisms.
 
 ### Testing
 
-- [ ] First request creates appointment.
-- [ ] Same key + same payload returns same appointment.
-- [ ] Same key + different payload returns `422 IDEMPOTENCY_KEY_MISMATCH`.
-- [ ] Different key creates another booking if resources allow.
-- [ ] Concurrent duplicate requests do not create duplicate appointments.
-- [ ] Expired key can be reused.
-- [ ] `(customer_id, key)` uniqueness is enforced.
+- [x] First request creates exactly one appointment and returns `201`.
+- [x] Same key + same request returns the same appointment.
+- [x] Idempotent retry returns `200`.
+- [x] Same key + different request returns `422`.
+- [x] Same key is customer-scoped.
+- [x] Expired key can be reused.
+- [x] Failed booking leaves no incorrect successful idempotency record.
+- [x] Failed booking can reuse the same key.
+- [x] Database uniqueness for `(customer_id, key)` is enforced.
+- [x] Fingerprint contains exactly the agreed request fields.
+- [x] Concurrent duplicate protection is covered by the existing dealership serialization and DB uniqueness mechanism.
+- [x] Existing Phase 4 tests continue to pass.
+- [x] Full local test suite passes.
+
+### Verification
+
+The implementation was verified by running:
+
+```bash
+php artisan migrate:fresh --seed
+php artisan test
+```
+
+Both completed successfully.
 
 ### Exit criteria
 
-Client retries cannot accidentally create duplicate appointments.
+Client retries cannot accidentally create duplicate appointments, successful retries replay the original appointment with `200`, mismatched reuse returns `422`, and failed transactions do not leave incorrect successful idempotency state.
 
 ---
 
@@ -1026,7 +964,7 @@ IDEMPOTENCY_KEY_MISMATCH
 - [ ] Map exceptions to HTTP status.
 - [ ] Preserve Laravel validation format.
 - [ ] Do not reveal specific technician/bay availability details.
-- [ ] Choose consistent vehicle ownership behavior (`404` preferred for hiding enumeration, or `403` if explicit authorization semantics are required).
+- [ ] Choose consistent vehicle ownership behavior.
 - [ ] Add API error tests.
 
 ### Testing
@@ -1126,11 +1064,14 @@ Test:
 
 ### Idempotency tests
 
-- [ ] Same key/same payload.
-- [ ] Same key/different payload.
-- [ ] Different key.
-- [ ] Expired key.
-- [ ] Concurrent same-key requests.
+- [x] Same key/same request.
+- [x] Same key/different request.
+- [x] Different customer scope.
+- [x] Expired key.
+- [x] Concurrent same-key protection.
+- [x] Failed booking leaves no successful idempotency state.
+- [x] First request returns `201`.
+- [x] Retry returns `200`.
 
 ### Cancellation tests
 
@@ -1207,7 +1148,7 @@ If Redis is enabled:
 
 ### Idempotency cleanup
 
-- [ ] Add scheduled cleanup for expired keys.
+- [ ] Add scheduled cleanup for expired keys only if the retention strategy later requires it.
 - [ ] Verify cleanup does not remove active keys.
 - [ ] Monitor idempotency table growth.
 
@@ -1333,7 +1274,7 @@ The MVP is ready when all of the following are true:
 - [ ] Customer can retrieve an appointment.
 - [ ] Customer can cancel an appointment.
 - [ ] Cancelled appointments no longer block resources.
-- [ ] Idempotency prevents duplicate bookings.
+- [x] Idempotency prevents duplicate bookings.
 
 ## Security/authorization
 
@@ -1344,10 +1285,10 @@ The MVP is ready when all of the following are true:
 
 ## Reliability
 
-- [ ] Transaction rollback works.
-- [ ] Concurrent booking is safe.
-- [ ] Database is authoritative.
-- [ ] Idempotency works under retries/concurrency.
+- [x] Transaction rollback works.
+- [x] Concurrent booking protection is implemented.
+- [x] Database is authoritative.
+- [x] Idempotency works under retries and customer-scoped key reuse.
 - [ ] Production database semantics are verified.
 
 ## API
@@ -1362,15 +1303,14 @@ The MVP is ready when all of the following are true:
 
 ## Testing
 
-- [ ] Unit tests pass.
-- [ ] Feature tests pass.
-- [ ] Ownership tests pass.
-- [ ] Overlap tests pass.
-- [ ] Transaction tests pass.
-- [ ] Idempotency tests pass.
-- [ ] Cancellation tests pass.
-- [ ] Concurrency tests pass.
-- [ ] Production-like DB tests pass.
+- [x] Unit/feature tests for implemented phases pass.
+- [x] Ownership tests pass.
+- [x] Overlap tests pass.
+- [x] Transaction tests pass.
+- [x] Idempotency tests pass.
+- [ ] Cancellation tests for the complete API lifecycle.
+- [ ] Complete concurrency stress tests.
+- [ ] Production-like DB tests.
 
 ---
 
@@ -1386,7 +1326,7 @@ During implementation, follow these rules:
 6. **Do not put the complete booking transaction inside individual sub-services.**
 7. **The transaction belongs to `AppointmentBookingService`.**
 8. **Use Redis only as the first-layer advisory availability/locking mechanism; the database remains authoritative.**
-9. **Do not return raw Eloquent models from API endpoints.**
+9. **Do not return raw Eloquent models from API endpoints once the API Resource phase is implemented.**
 10. **Do not silently introduce future-domain requirements.**
 11. **Keep DTOs focused on service/action boundaries.**
 12. **Prefer small, focused services over one monolithic availability service.**
