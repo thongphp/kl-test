@@ -17,6 +17,7 @@ final class ResourceConflictException extends RuntimeException
     {
         return response()->json([
             'message' => $this->getMessage(),
+            'code' => 'NO_RESOURCE_AVAILABLE',
         ], 409);
     }
 }

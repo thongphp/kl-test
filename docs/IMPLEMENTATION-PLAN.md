@@ -928,6 +928,10 @@ The complete appointment lifecycle is available through the API.
 
 Make error behavior consistent and predictable.
 
+### Status
+
+✅ **Done.** Phase 7 was implemented and the complete local test suite passed successfully.
+
 ### HTTP mapping
 
 | Situation | HTTP | Code |
@@ -947,6 +951,8 @@ BOOKING_IN_PROGRESS
 APPOINTMENT_CANNOT_BE_CANCELLED
 ```
 
+All business conflict exceptions return HTTP `409`.
+
 ### Business validation codes
 
 ```text
@@ -955,26 +961,49 @@ SERVICE_TYPE_INACTIVE
 IDEMPOTENCY_KEY_MISMATCH
 ```
 
+These business validation errors return HTTP `422`.
+
+### Vehicle ownership behavior
+
+A vehicle belonging to another customer is currently treated as a business validation failure and returns HTTP `422`.
+
+This preserves the existing Phase 3 ownership behavior and is intentionally not changed to `404` in this phase.
+
 ### Checklist
 
-- [ ] Define domain/business exceptions.
-- [ ] Define consistent error codes.
-- [ ] Map exceptions to HTTP status.
-- [ ] Preserve Laravel validation format.
-- [ ] Do not reveal specific technician/bay availability details.
-- [ ] Choose consistent vehicle ownership behavior.
-- [ ] Add API error tests.
+- [x] Define domain/business exceptions.
+- [x] Define consistent error codes.
+- [x] Map exceptions to HTTP status.
+- [x] Preserve Laravel validation format.
+- [x] Do not reveal specific technician/bay availability details.
+- [x] Keep the existing vehicle ownership behavior: another customer's vehicle returns `422`.
+- [x] Add API error tests.
 
 ### Testing
 
-- [ ] Every documented business exception has correct status.
-- [ ] Every business exception has correct code.
-- [ ] Validation errors use Laravel format.
-- [ ] No sensitive resource availability information leaks.
+- [x] Every documented business exception has correct status.
+- [x] Every business exception has correct code.
+- [x] Validation errors use Laravel format.
+- [x] Unauthenticated requests retain Laravel `401` behavior.
+- [x] Ownership behavior is covered.
+- [x] No sensitive resource availability information leaks.
+- [x] No internal exception/trace details leak in API error responses.
+- [x] Complete local Pest test suite passes.
+
+### Verification
+
+The implementation was verified by running:
+
+```bash
+php artisan migrate:fresh --seed
+php artisan test
+```
+
+The complete test suite passed successfully.
 
 ### Exit criteria
 
-API consumers can reliably distinguish validation errors, authorization failures, and booking conflicts.
+API consumers can reliably distinguish validation errors, authorization failures, and booking conflicts. Phase 7 is complete.
 
 ---
 

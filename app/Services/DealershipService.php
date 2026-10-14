@@ -2,8 +2,8 @@
 
 namespace App\Services;
 
+use App\Exceptions\BusinessValidationException;
 use App\Models\Dealership;
-use Illuminate\Validation\ValidationException;
 
 final class DealershipService
 {
@@ -12,11 +12,19 @@ final class DealershipService
         $dealership = Dealership::withTrashed()->find($dealershipId);
 
         if ($dealership === null) {
-            throw ValidationException::withMessages(['dealership_id' => 'The selected dealership does not exist.']);
+            throw new BusinessValidationException(
+                'DEALERSHIP_NOT_FOUND',
+                'dealership_id',
+                'The selected dealership does not exist.',
+            );
         }
 
         if ($dealership->trashed() || ! $dealership->active) {
-            throw ValidationException::withMessages(['dealership_id' => 'The selected dealership is unavailable.']);
+            throw new BusinessValidationException(
+                'DEALERSHIP_INACTIVE',
+                'dealership_id',
+                'The selected dealership is unavailable.',
+            );
         }
 
         return $dealership;
@@ -30,11 +38,19 @@ final class DealershipService
             ->first();
 
         if ($dealership === null) {
-            throw ValidationException::withMessages(['dealership_id' => 'The selected dealership does not exist.']);
+            throw new BusinessValidationException(
+                'DEALERSHIP_NOT_FOUND',
+                'dealership_id',
+                'The selected dealership does not exist.',
+            );
         }
 
         if ($dealership->trashed() || ! $dealership->active) {
-            throw ValidationException::withMessages(['dealership_id' => 'The selected dealership is unavailable.']);
+            throw new BusinessValidationException(
+                'DEALERSHIP_INACTIVE',
+                'dealership_id',
+                'The selected dealership is unavailable.',
+            );
         }
 
         return $dealership;

@@ -17,6 +17,7 @@ final class IdempotencyKeyMismatchException extends RuntimeException
     {
         return response()->json([
             'message' => $this->getMessage(),
+            'code' => 'IDEMPOTENCY_KEY_MISMATCH',
         ], 422);
     }
 }
