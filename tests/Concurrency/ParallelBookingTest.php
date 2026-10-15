@@ -30,8 +30,10 @@ function fireParallelBookings(array $attempts): array
 {
     $startAt = microtime(true) + (float) env('PARALLEL_BARRIER_SECONDS', 5.0);
 
-    $tasks = array_map(
-        fn (array $attempt) => static function () use ($attempt, $startAt) {
+			$tasks = [];
+
+			foreach ($attempts as $attemp) {
+					$tasks[] = static function () use ($attempt, $startAt) {
             $wait = $startAt - microtime(true);
             if ($wait > 0) {
                 usleep((int) ($wait * 1_000_000));
@@ -57,11 +59,10 @@ function fireParallelBookings(array $attempts): array
                 'status' => $response->getStatusCode(),
                 'body' => json_decode($response->getContent(), true),
             ];
-        },
-        $attempts,
-    );
+        };
+			}
 
-    return Concurrency::run(array_values($tasks));
+    return Concurrency::run($tasks);
 }
 
 /**
