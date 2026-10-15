@@ -61,7 +61,7 @@ COPY composer.json composer.lock* ./
 # Note: docker-compose bind-mounts ./ over /var/www/html, so this vendor/ is hidden
 # at runtime. After `docker compose up -d`, run:
 #   docker compose exec app composer install
-RUN composer install --prefer-dist --no-interaction --no-progress --no-scripts || true
+RUN composer install --prefer-dist --no-interaction --no-progress --no-scripts
 
 # Copy application code (if building image with app code included)
 COPY . .

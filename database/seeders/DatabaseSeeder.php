@@ -10,6 +10,7 @@ use App\Models\Technician;
 use App\Models\Vehicle;
 use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
+use Illuminate\Support\Facades\Hash;
 
 class DatabaseSeeder extends Seeder
 {
@@ -28,6 +29,7 @@ class DatabaseSeeder extends Seeder
 
         Customer::factory()->has(Vehicle::factory(2))->create([
             'email' => 'customer@example.com',
+            'password' => Hash::make('password'),
         ]);
     }
 }

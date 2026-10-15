@@ -8,7 +8,6 @@ use App\Models\ServiceBay;
 use App\Models\ServiceType;
 use App\Models\Technician;
 use App\Models\Vehicle;
-use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 
 /*
@@ -137,56 +136,40 @@ it('hides soft deleted resources from normal queries and from booking', function
 |--------------------------------------------------------------------------
 |
 | A second connection holds FOR UPDATE on the dealership row. Booking must NOT
-| get through while that lock is held (lock_timeout turns waiting into an error),
-| and must work again right after the lock is released. The retry also proves
-| the Redis dealership lock is released after a failed attempt.
+| get through while that lock is held: it waits up to booking.db_lock_timeout_ms,
+| then fails fast with 409 BOOKING_IN_PROGRESS. After the lock is released the
+| same booking works. The retry also proves the Redis dealership lock is released
+| after the failed attempt.
 |
 */
 
-it('takes a row lock on the dealership while booking', function (object $booking) {
+it('takes a row lock on the dealership and fails fast with BOOKING_IN_PROGRESS on lock timeout', function (object $booking) {
+    config()->set('booking.db_lock_timeout_ms', 1000);
     config()->set('database.connections.lock_holder', config('database.connections.'.config('database.default')));
 
-    $dealerships = (new Dealership)->getTable();
     $holder = DB::connection('lock_holder');
     $holder->beginTransaction();
 
-    $status = null;
-    $thrown = null;
-
     try {
-        $holder->table($dealerships)->where('id', $booking->dealership->id)->lockForUpdate()->first();
+        $holder->table((new Dealership)->getTable())
+            ->where('id', $booking->dealership->id)
+            ->lockForUpdate()
+            ->first();
 
-        DB::statement("SET lock_timeout = '1000ms'");
-        $this->withoutExceptionHandling();
+        $startedAt = microtime(true);
 
-        try {
-            $status = $this->postJson('/api/v1/appointments', bookingPayload($booking))->getStatusCode();
-        } catch (Throwable $e) {
-            $thrown = $e;
-        }
+        $this->postJson('/api/v1/appointments', bookingPayload($booking))
+            ->assertStatus(409)
+            ->assertJsonPath('code', 'BOOKING_IN_PROGRESS');
+
+        // Failed fast (about the 1s timeout), did not hang.
+        expect(microtime(true) - $startedAt)->toBeLessThan(5.0)
+            ->and(Appointment::query()->count())->toBe(0);
     } finally {
         $holder->rollBack();
         DB::purge('lock_holder');
     }
 
-    $sqlStates = [];
-    for ($e = $thrown; $e !== null; $e = $e->getPrevious()) {
-        if ($e instanceof QueryException || $e instanceof PDOException) {
-            $sqlStates[] = $e->errorInfo[0] ?? null;
-        }
-    }
-
-    // Blocked: never 201 while someone else holds the dealership row.
-    expect($status)->not->toBe(201)
-        ->and(Appointment::query()->count())->toBe(0);
-
-    if ($thrown !== null) {
-        expect($sqlStates)->toContain('55P03'); // lock_not_available
-    }
-
-    // Lock released: booking works again.
-    DB::statement('RESET lock_timeout');
-    $this->withExceptionHandling();
-
+    // Lock released: booking works again (also proves the Redis lock was released).
     $this->postJson('/api/v1/appointments', bookingPayload($booking))->assertCreated();
 })->with('booking');
