@@ -32,7 +32,7 @@ function fireParallelBookings(array $attempts): array
 
 			$tasks = [];
 
-			foreach ($attempts as $attemp) {
+			foreach ($attempts as $attempt) {
 					$tasks[] = static function () use ($attempt, $startAt) {
             $wait = $startAt - microtime(true);
             if ($wait > 0) {
