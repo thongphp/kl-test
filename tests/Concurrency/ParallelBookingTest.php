@@ -103,7 +103,7 @@ function assertNoOverlappingAppointments(string $resourceColumn): void
 
         for ($i = 1; $i < $list->count(); $i++) {
             expect($list[$i]->start_at->greaterThanOrEqualTo($list[$i - 1]->end_at))
-                ->toBeTrue();
+                ->toBeTrue("overlap on {$resourceColumn}");
         }
     }
 }
