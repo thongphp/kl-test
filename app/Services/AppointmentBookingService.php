@@ -4,13 +4,19 @@ namespace App\Services;
 
 use App\DTOs\Appointment\AppointmentBookingResult;
 use App\DTOs\Appointment\CreateAppointmentData;
+use App\Exceptions\BookingInProgressException;
 use App\Exceptions\ResourceConflictException;
 use App\Models\Customer;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Throwable;
 
 final class AppointmentBookingService
 {
+    /** PostgreSQL: lock_not_available (lock_timeout) and deadlock_detected. */
+    private const LOCK_WAIT_SQLSTATES = ['55P03', '40P01'];
+
     public function __construct(
         private readonly CustomerService $customerService,
         private readonly DealershipService $dealershipService,
@@ -30,6 +36,8 @@ final class AppointmentBookingService
 
         try {
             $result = DB::transaction(function () use ($data, $idempotencyKey, $fingerprint): AppointmentBookingResult {
+                $this->limitLockWait();
+
                 $dealership = $this->dealershipService->lockActive($data->dealershipId);
 
                 $customer = Customer::query()->findOrFail($data->customerId);
@@ -116,20 +124,58 @@ final class AppointmentBookingService
                         startAt: $result->appointment->start_at,
                         endAt: $result->appointment->end_at,
                     );
-                } catch (Throwable) {
+                } catch (Throwable $exception) {
                     // The DB transaction and idempotency record are already committed.
+                    Log::warning('booking.redis_index_failed', [
+                        'appointment_id' => $result->appointment->getKey(),
+                        'dealership_id' => $result->appointment->dealership_id,
+                        'exception_class' => $exception::class,
+                        'reason' => $exception->getMessage(),
+                    ]);
                 }
             }
 
             return $result;
+        } catch (QueryException $exception) {
+            // Waited too long for the dealership row lock (or deadlock): fail fast, client may retry.
+            if ($this->isLockWaitFailure($exception)) {
+                throw new BookingInProgressException(previous: $exception);
+            }
+
+            throw $exception;
         } finally {
             if ($lock !== null) {
                 try {
                     $lock->release();
-                } catch (Throwable) {
+                } catch (Throwable $exception) {
                     // The DB transaction has already established the authoritative result.
+                    Log::warning('booking.redis_lock_release_failed', [
+                        'dealership_id' => $data->dealershipId,
+                        'exception_class' => $exception::class,
+                        'reason' => $exception->getMessage(),
+                    ]);
                 }
             }
         }
+    }
+
+    /**
+     * PostgreSQL only: bound the wait for the dealership row lock for THIS transaction.
+     * SET LOCAL resets automatically when the transaction ends.
+     */
+    private function limitLockWait(): void
+    {
+        $milliseconds = (int) config('booking.db_lock_timeout_ms', 5000);
+
+        if ($milliseconds > 0 && DB::connection()->getDriverName() === 'pgsql') {
+            DB::statement("SET LOCAL lock_timeout = '{$milliseconds}ms'");
+        }
+    }
+
+    private function isLockWaitFailure(QueryException $exception): bool
+    {
+        $sqlState = $exception->errorInfo[0] ?? $exception->getCode();
+
+        return in_array((string) $sqlState, self::LOCK_WAIT_SQLSTATES, true);
     }
 }

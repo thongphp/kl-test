@@ -86,3 +86,27 @@ pest()
     ->use(Illuminate\Foundation\Testing\RefreshDatabase::class)
     ->afterEach(fn () => CarbonImmutable::setTestNow())
     ->in('Feature', 'Unit');
+
+/*
+|--------------------------------------------------------------------------
+| Concurrency suite (Phase 9)
+|--------------------------------------------------------------------------
+|
+| Real parallel requests run in separate PHP processes, so data must be
+| COMMITTED. RefreshDatabase wraps each test in a transaction that child
+| processes cannot see, so this folder uses DatabaseTruncation instead.
+| Needs PostgreSQL/MySQL: SQLite ignores lockForUpdate().
+|
+| Run with: php artisan test tests/Concurrency
+|
+*/
+pest()
+    ->extend(TestCase::class)
+    ->use(Illuminate\Foundation\Testing\DatabaseTruncation::class)
+    ->beforeEach(function () {
+        if (Illuminate\Support\Facades\DB::connection()->getDriverName() !== 'pgsql') {
+            $this->markTestSkipped('Needs PostgreSQL (set DB_CONNECTION=pgsql). See Phase 9.');
+        }
+    })
+    ->afterEach(fn () => CarbonImmutable::setTestNow())
+    ->in('Concurrency');

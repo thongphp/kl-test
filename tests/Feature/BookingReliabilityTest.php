@@ -168,7 +168,7 @@ it('keeps the database authoritative when the Redis index wrongly reports a busy
 
 /*
 |--------------------------------------------------------------------------
-| Double booking (sequential; true parallelism is the todo() items below)
+| Double booking (sequential; true parallelism: tests/Concurrency/ParallelBookingTest.php)
 |--------------------------------------------------------------------------
 */
 
@@ -229,8 +229,4 @@ it('does not make different dealerships conflict and locks each dealership separ
     expect(Appointment::query()->count())->toBe(2);
 })->with('booking');
 
-// Need real parallel requests on MySQL/PostgreSQL with a non-transactional DB trait
-// (SQLite ignores lockForUpdate(), see Phase 9).
-it('never double books the same technician under parallel requests')->todo();
-it('never double books the same service bay under parallel requests')->todo();
-it('serialises parallel bookings for the same dealership')->todo();
+// Real parallel-request tests: see tests/Concurrency/ParallelBookingTest.php
