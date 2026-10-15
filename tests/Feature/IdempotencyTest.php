@@ -268,6 +268,4 @@ it('fingerprints exactly the documented request fields', function (object $booki
     expect(IdempotencyKey::query()->firstOrFail()->request_fingerprint)->toBe($expected);
 })->with('booking');
 
-// Needs real parallel requests on MySQL/PostgreSQL (see Phase 9). Until then the
-// DB unique constraint tested above is the guard.
-it('prevents duplicates when the same key is submitted in parallel')->todo();
+// Parallel same-key requests: see tests/Concurrency/ParallelBookingTest.php

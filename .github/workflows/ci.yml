@@ -11,14 +11,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Cache the vendor directory based on the composer.lock file
-      - name: Cache Composer dependencies
+      # Cache the composer vendor
+      - name: Cache composer dependencies
         uses: actions/cache@v4
         with:
           path: vendor
           key: ${{ runner.os }}-composer-${{ hashFiles('**/composer.lock') }}
           restore-keys: |
             ${{ runner.os }}-composer-
+
 
       - name: Verify Docker
         run: |
@@ -64,9 +65,15 @@ jobs:
           docker compose exec -T app php artisan migrate --force
           docker compose exec -T app php artisan db:seed --force
 
+      # Tests run on their own database (created by docker/postgres/init) so they never wipe the dev DB
       - name: Run tests
         run: |
-          docker compose exec -T app php artisan test
+          docker compose exec -T -e DB_DATABASE=kl_test_testing app php artisan test
+
+      # Real parallel requests against PostgreSQL (Phase 9)
+      - name: Run concurrency & PostgreSQL tests
+        run: |
+          docker compose exec -T -e DB_DATABASE=kl_test_testing app php artisan test tests/Concurrency
 
       - name: Save docker-compose logs on failure
         if: failure()
